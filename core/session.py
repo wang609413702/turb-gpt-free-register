@@ -47,18 +47,9 @@ class BrowserSession:
         # proxy=""    → 禁用代理（直连）
         # proxy="..." → 使用指定代理
         if proxy is None:
-            raw_proxy = pick_proxy()
+            self.proxy = pick_proxy()
         else:
-            raw_proxy = proxy
-        # 统一将 socks5:// 转为 socks5h://（远程 DNS 解析），避免 curl_cffi 本地解析 DNS
-        # 导致 TLS 握手到错误的内网 IP（如 198.18.x.x 这类预留网段）
-        if raw_proxy:
-            normalized = raw_proxy.replace("socks5://", "socks5h://")
-            # 避免 socks5h:// 被重复替换成 socks5hh://
-            normalized = normalized.replace("socks5hh://", "socks5h://")
-            self.proxy = normalized
-        else:
-            self.proxy = raw_proxy
+            self.proxy = proxy
 
         # 生成设备ID（oai-did），整个注册流程复用
         self.device_id = str(uuid.uuid4())
