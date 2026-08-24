@@ -10,6 +10,7 @@
 """
 import json
 import logging
+import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,39 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
+
+
+def _post_register_dwell_seconds() -> float:
+    try:
+        from config import register as _register_cfg
+
+        raw = str(getattr(_register_cfg, "POST_REGISTER_DWELL_SECONDS_RANGE", "18,45") or "0,0").strip()
+    except Exception:
+        raw = "0,0"
+    try:
+        parts = [float(x.strip()) for x in raw.replace(";", ",").replace("|", ",").split(",") if x.strip()]
+        if not parts:
+            lo = hi = 0.0
+        elif len(parts) == 1:
+            lo = hi = parts[0]
+        else:
+            lo, hi = parts[0], parts[1]
+    except Exception:
+        lo = hi = 0.0
+    lo, hi = max(0.0, lo), max(0.0, hi)
+    if hi < lo:
+        lo, hi = hi, lo
+    seconds = random.uniform(lo, hi) if hi > lo else lo
+    return max(0.0, min(300.0, seconds))
+
+
+def post_register_dwell(email: str, *, label: str = "注册后") -> None:
+    """注册成功后随机停留一段时间；供不同浏览器驱动复用。"""
+    seconds = _post_register_dwell_seconds()
+    if seconds <= 0:
+        return
+    logger.info("[%s] 注册成功后随机停留 %.1fs：%s", label, seconds, email)
+    time.sleep(seconds)
 
 
 def _account_material_line(email: str, row: dict | None = None) -> str:
@@ -391,6 +425,7 @@ def save_account_data(
     batch_dir: Path | None = None,
     live_browser_page=None,
     plan_result: dict | None = None,
+    auto_plan_check: bool | None = None,
 ) -> int:
     """
     将账号信息保存到本地 JSON/TXT 文件存储。
@@ -437,86 +472,97 @@ def save_account_data(
     )
     logger.info(f"[Save] 账号已写入 DB, id={row_id}, email={email}")
     logger.info(f"[Save] 批次归档目录: {batch_folder}")
-    # 浏览器注册流程已经拥有通过 Cloudflare 的真实页面时，优先在该页面查询。
-    # 后台 WebUI 没有可复用的 live page，才退回纯 HTTP 队列。
-    browser_plan_result = plan_result
-    if browser_plan_result is None and live_browser_page is not None:
+    if auto_plan_check is None:
         try:
-            from core.chatgpt_plan import check_account_plan_browser
-            browser_plan_result = check_account_plan_browser(live_browser_page, access_token)
-        except Exception as exc:
-            browser_plan_result = {
-                "ok": False,
-                "checked_at": datetime.now().isoformat(timespec="seconds"),
-                "error": f"浏览器套餐查询异常: {type(exc).__name__}: {str(exc)[:180]}",
-                "retryable": True,
-                "needs_live_check": False,
-                "browser_context": True,
-                "network_route": "browser",
-                "proxy_mode": "browser",
-            }
-    needs_http_plan = browser_plan_result is None or (
-        not browser_plan_result.get("ok") and bool(browser_plan_result.get("retryable"))
-    )
-    if browser_plan_result is not None and not needs_http_plan:
-        try:
-            db.update_account_plan_check(acc_id=row_id, result=browser_plan_result)
-            if browser_plan_result.get("ok"):
-                logger.info(f"[Plan] 浏览器上下文查询成功: id={row_id}, email={email}")
-            else:
-                logger.warning(
-                    f"[Plan] 浏览器上下文查询失败且不可重试: "
-                    f"id={row_id}, email={email}, error={browser_plan_result.get('error')}"
-                )
-        except Exception as exc:
-            logger.warning(
-                f"[Plan] 写入浏览器套餐查询结果失败（不影响注册结果）: "
-                f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
-            )
-    else:
-        try:
-            from core.plan_check_service import enqueue_account_plan_check
+            from config import register as _register_cfg
 
-            queued = enqueue_account_plan_check(
-                account_id=row_id,
-                email=email,
-                access_token=access_token,
-                trigger="registration_browser_fallback" if browser_plan_result is not None else "registration_auto",
-            )
-            if queued.get("accepted"):
-                if browser_plan_result is not None:
+            auto_plan_check = bool(getattr(_register_cfg, "AUTO_PLAN_CHECK_AFTER_REGISTER", False))
+        except Exception:
+            auto_plan_check = False
+
+    if auto_plan_check:
+        # 浏览器注册流程已经拥有通过 Cloudflare 的真实页面时，优先在该页面查询。
+        # 后台 WebUI 没有可复用的 live page，才退回纯 HTTP 队列。
+        browser_plan_result = plan_result
+        if browser_plan_result is None and live_browser_page is not None:
+            try:
+                from core.chatgpt_plan import check_account_plan_browser
+                browser_plan_result = check_account_plan_browser(live_browser_page, access_token)
+            except Exception as exc:
+                browser_plan_result = {
+                    "ok": False,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": f"浏览器套餐查询异常: {type(exc).__name__}: {str(exc)[:180]}",
+                    "retryable": True,
+                    "needs_live_check": False,
+                    "browser_context": True,
+                    "network_route": "browser",
+                    "proxy_mode": "browser",
+                }
+        needs_http_plan = browser_plan_result is None or (
+            not browser_plan_result.get("ok") and bool(browser_plan_result.get("retryable"))
+        )
+        if browser_plan_result is not None and not needs_http_plan:
+            try:
+                db.update_account_plan_check(acc_id=row_id, result=browser_plan_result)
+                if browser_plan_result.get("ok"):
+                    logger.info(f"[Plan] 浏览器上下文查询成功: id={row_id}, email={email}")
+                else:
                     logger.warning(
-                        f"[Plan] 浏览器上下文查询临时失败，已转入 HTTP 队列: "
+                        f"[Plan] 浏览器上下文查询失败且不可重试: "
                         f"id={row_id}, email={email}, error={browser_plan_result.get('error')}"
                     )
+            except Exception as exc:
+                logger.warning(
+                    f"[Plan] 写入浏览器套餐查询结果失败（不影响注册结果）: "
+                    f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
+                )
+        else:
+            try:
+                from core.plan_check_service import enqueue_account_plan_check
+
+                queued = enqueue_account_plan_check(
+                    account_id=row_id,
+                    email=email,
+                    access_token=access_token,
+                    trigger="registration_browser_fallback" if browser_plan_result is not None else "registration_auto",
+                )
+                if queued.get("accepted"):
+                    if browser_plan_result is not None:
+                        logger.warning(
+                            f"[Plan] 浏览器上下文查询临时失败，已转入 HTTP 队列: "
+                            f"id={row_id}, email={email}, error={browser_plan_result.get('error')}"
+                        )
+                    else:
+                        logger.info(f"[Plan] 注册后自动查询已入队: id={row_id}, email={email}")
+                elif queued.get("busy"):
+                    logger.info(f"[Plan] 账号已有套餐查询，注册流程不重复入队: id={row_id}, email={email}")
                 else:
-                    logger.info(f"[Plan] 注册后自动查询已入队: id={row_id}, email={email}")
-            elif queued.get("busy"):
-                logger.info(f"[Plan] 账号已有套餐查询，注册流程不重复入队: id={row_id}, email={email}")
-            else:
-                logger.warning(f"[Plan] 注册后自动查询入队失败（不影响注册结果）: {email}, {queued.get('error')}")
+                    logger.warning(f"[Plan] 注册后自动查询入队失败（不影响注册结果）: {email}, {queued.get('error')}")
+                    if browser_plan_result is not None:
+                        fallback_result = dict(browser_plan_result)
+                        fallback_result["error"] = (
+                            f"{browser_plan_result.get('error') or '浏览器套餐查询失败'}；"
+                            f"HTTP 降级入队失败: {queued.get('error') or '未知错误'}"
+                        )
+                        db.update_account_plan_check(acc_id=row_id, result=fallback_result)
+            except Exception as exc:
+                logger.warning(
+                    f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "
+                    f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
+                )
                 if browser_plan_result is not None:
                     fallback_result = dict(browser_plan_result)
                     fallback_result["error"] = (
                         f"{browser_plan_result.get('error') or '浏览器套餐查询失败'}；"
-                        f"HTTP 降级入队失败: {queued.get('error') or '未知错误'}"
+                        f"HTTP 降级异常: {type(exc).__name__}: {str(exc)[:120]}"
                     )
-                    db.update_account_plan_check(acc_id=row_id, result=fallback_result)
-        except Exception as exc:
-            logger.warning(
-                f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "
-                f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
-            )
-            if browser_plan_result is not None:
-                fallback_result = dict(browser_plan_result)
-                fallback_result["error"] = (
-                    f"{browser_plan_result.get('error') or '浏览器套餐查询失败'}；"
-                    f"HTTP 降级异常: {type(exc).__name__}: {str(exc)[:120]}"
-                )
-                try:
-                    db.update_account_plan_check(acc_id=row_id, result=fallback_result)
-                except Exception:
-                    logger.exception("[Plan] 写入浏览器套餐降级失败状态异常: account_id=%s", row_id)
+                    try:
+                        db.update_account_plan_check(acc_id=row_id, result=fallback_result)
+                    except Exception:
+                        logger.exception("[Plan] 写入浏览器套餐降级失败状态异常: account_id=%s", row_id)
+    else:
+        logger.info(f"[Plan] 注册后自动套餐查询已跳过: id={row_id}, email={email}")
     # 注册默认查 JP 试用资格（走 TRIAL_JP_PROXY_POOL）；JP 池未配置时跳过，不影响注册。
     try:
         from core.trial_check_service import enqueue_account_trial_check

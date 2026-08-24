@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import inspect
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -406,8 +407,10 @@ class FastSaveTests(unittest.TestCase):
                  patch.object(db, "_TOKENS_TXT", tokens_txt), \
                  patch.object(db, "_OUTLOOK_TXT", root / "outlook.txt"), \
                  patch.object(db, "_VIEWER_HTML", viewer):
-                # 新账号走全量保存：JSON + TXT + viewer 都生成。
-                db.insert_account(email="fast@test.com", access_token="tok")
+                # 新账号走全量保存：JSON + TXT 立即生成，viewer 由上游防抖线程异步生成。
+                with patch.object(db, "_VIEWER_DEBOUNCE_SECONDS", 0.01):
+                    db.insert_account(email="fast@test.com", access_token="tok")
+                    time.sleep(0.05)
                 self.assertTrue(accounts_path.exists())
                 self.assertTrue(accounts_txt.exists())
                 self.assertTrue(viewer.exists())

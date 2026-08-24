@@ -373,6 +373,101 @@
       display: inline-flex; align-items: center; gap: 8px;
       color: #606266; font-size: 14px; white-space: nowrap;
     }
+    .accounts-filter-v2 .acc-v2-date {
+      height: 40px; padding: 0 8px;
+      border: 1px solid #dcdfe6; border-radius: 6px;
+      background: #fff; color: #606266; font-size: 14px;
+      box-sizing: border-box; vertical-align: middle;
+      font-family: inherit;
+    }
+    .accounts-filter-v2 .acc-v2-date:hover,
+    .accounts-filter-v2 .acc-v2-date:focus { border-color: #409eff; outline: none; }
+    .accounts-filter-v2 .acc-v2-date-select,
+    .codex-filter-v2 .acc-v2-date-select {
+      position: relative; display: inline-flex; vertical-align: middle;
+    }
+    .accounts-filter-v2 .acc-v2-date-select-btn,
+    .codex-filter-v2 .acc-v2-date-select-btn {
+      min-height: 32px; margin: 0; padding: 0 28px 0 12px;
+      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
+      color: #606266; font: inherit; font-size: 13px; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: flex-start;
+      box-sizing: border-box; position: relative; text-align: left;
+      white-space: nowrap;
+    }
+    .accounts-filter-v2 .acc-v2-date-select-btn:hover,
+    .accounts-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn,
+    .codex-filter-v2 .acc-v2-date-select-btn:hover,
+    .codex-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn {
+      border-color: #377DFF;
+    }
+    .accounts-filter-v2 .acc-v2-date-select-btn::after,
+    .codex-filter-v2 .acc-v2-date-select-btn::after {
+      content: ""; position: absolute; right: 10px; top: 50%;
+      width: 0; height: 0; margin-top: -2px;
+      border-left: 5px solid transparent; border-right: 5px solid transparent;
+      border-top: 6px solid #909399;
+    }
+    .accounts-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn::after,
+    .codex-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn::after {
+      margin-top: -4px; border-top: none; border-bottom: 6px solid #909399;
+    }
+    .acc-v2-date-select-menu {
+      display: none; position: absolute; left: 0; top: calc(100% + 6px);
+      min-width: 300px; padding: 10px; z-index: 300;
+      border-radius: 8px; background: #fff;
+      box-shadow: 0 8px 24px rgba(15,23,42,.12), 0 0 0 1px rgba(15,23,42,.04);
+      box-sizing: border-box; font-size: 13px; color: #606266;
+    }
+    .acc-v2-date-select.open .acc-v2-date-select-menu { display: block; }
+    .acc-v2-date-select-menu-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .acc-v2-date-select-menu-row:last-of-type { margin-bottom: 0; }
+    .acc-v2-date-select-menu-row span { white-space: nowrap; color: #606266; }
+    .acc-v2-date-select-menu .acc-v2-date { flex: 1; min-width: 0; height: 32px; }
+    .acc-v2-date-select-menu .jobs-tb-btn {
+      min-height: 30px; padding: 0 10px; font-size: 13px; line-height: 1;
+    }
+    .acc-v2-date-select-actions {
+      display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;
+    }
+    .cal { min-width: 264px; user-select: none; }
+    .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .cal-nav {
+      width: 28px; height: 28px; padding: 0;
+      border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
+      color: #606266; font-size: 16px; line-height: 1; cursor: pointer;
+    }
+    .cal-nav:hover { border-color: #377DFF; color: #377DFF; }
+    .cal-title { font-weight: 600; color: #303133; font-size: 14px; }
+    .cal-week {
+      display: grid; grid-template-columns: repeat(7, 1fr);
+      text-align: center; color: #909399; font-size: 12px; margin-bottom: 6px;
+    }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+    .cal-cell {
+      height: 32px; padding: 0; border: none; border-radius: 6px;
+      background: transparent; color: #606266; font: inherit; font-size: 13px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      box-sizing: border-box;
+    }
+    .cal-cell:hover { background: #f5f7fa; color: #377DFF; }
+    .cal-cell.other { color: #c0c4cc; }
+    .cal-cell.start, .cal-cell.end { background: #377DFF; color: #fff; font-weight: 600; }
+    .cal-cell.start { border-radius: 6px 0 0 6px; }
+    .cal-cell.end { border-radius: 0 6px 6px 0; }
+    .cal-cell.start.end { border-radius: 6px; }
+    .cal-cell.in-range { background: #EBF2FF; color: #377DFF; }
+    .cal-foot {
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid #ebeef5;
+    }
+    .cal-foot-btns { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .cal-foot-btns .jobs-tb-btn { min-height: 26px; padding: 0 8px; font-size: 12px; }
+    .cal-foot-tip {
+      margin-top: 8px; color: #909399; font-size: 12px;
+      line-height: 1.4; user-select: none; text-align: center;
+    }
     .jobs-toolbar-v2 .el-input-number,
     .accounts-filter-v2 .el-input-number {
       position: relative; display: inline-flex; width: 150px; height: 40px;
@@ -1196,6 +1291,16 @@
     #codexToolbarV2 {
       padding: 12px 16px 16px;
       justify-content: flex-start;
+    }
+    #codexToolbarV2 .jobs-tb-btn {
+      min-height: 32px; padding: 0 12px; font-size: 13px;
+    }
+    #codexToolbarV2 .jobs-tb-btn.is-active {
+      color: #377DFF; background: #EBF2FF; border-color: #9BBEFF;
+      font-weight: 500;
+    }
+    #codexToolbarV2 .jobs-tb-btn.is-active:hover {
+      background: #dce8ff; border-color: #3A7FFF; color: #3A7FFF;
     }
     .codex-table-v2-wrap { overflow: auto; padding: 0; }
     .codex-table-v2 {
@@ -3175,13 +3280,34 @@
           </label>
           <button type="button" class="acc-v2-toggle" id="showArchivedAccountsV2" aria-pressed="false" title="默认只显示未归档账号；开启后单独查看归档账号">查看归档</button>
           <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通 Plus 的账号">已开通Plus</button>
+          <label class="acc-v2-inline" title="按账号状态筛选账号">
+            <select id="codexStatusFilterV2">
+              <option value="">全部状态</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+              <option value="retrying">补跑中</option>
+              <option value="stopped">已停止</option>
+              <option value="skipped">已跳过</option>
+              <option value="deactivated">账号废号</option>
+            </select>
+          </label>
+          <div class="acc-v2-date-select" id="dateSelectAccountsV2">
+            <button type="button" class="acc-v2-date-select-btn" id="btnDateFilterAccountsV2" title="按注册时间筛选日期范围">📅 日期筛选</button>
+            <div class="acc-v2-date-select-menu" id="dateFilterPanelAccountsV2"></div>
+          </div>
+          <div class="hidden">
+            <input type="date" id="dateFromAccountsV2">
+            <input type="date" id="dateToAccountsV2">
+          </div>
           <button type="button" class="jobs-tb-btn" id="btnRefreshAccountsV2" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveTopV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
 
         </div>
       </div>
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">功能</span>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐（仅套餐，不含试用资格）">查套餐</button>
           <div class="tb-dd" id="trialBulkDd">
             <button type="button" class="jobs-tb-btn jobs-tb-btn--primary tb-dd-btn" id="btnCheckSelectedTrialsV2" disabled aria-haspopup="true" aria-expanded="false" title="按地区查选中账号的 Plus 试用资格；点击选择地区（JP/GB/DE/BR/TH/PH），地区由查试用代理池出口决定">查资格</button>
@@ -3212,6 +3338,8 @@
           <span class="acc-v2-btn-group-title">批量</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnNoteSelectedAccountsV2" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedTokensV2" disabled title="复制选中账号的 Token，每个账号一行">复制Token</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExportSelectedEmailsV2" disabled title="按邮箱池「复制邮箱」同格式导出选中账号的邮箱素材（outlook: email----密码----clientId----refreshToken；API邮箱: email----取码地址），每个账号一行">导出邮箱</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
@@ -3276,6 +3404,12 @@
       </h3>
       <div class="log" id="retryLogContent">加载中…</div>
     </div>
+    <div class="body hidden" id="liveLogPanel">
+      <h3>查活日志：<span id="liveLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseLiveLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="liveLogContent">加载中…</div>
+    </div>
   </div>
 
   <!-- ============ Codex 授权 ============ -->
@@ -3315,11 +3449,21 @@
         <div class="acc-v2-btn-group acc-v2-search-wrap">
           <input id="qCodexV2" type="search" placeholder="搜索邮箱、plan、account_id…" autocomplete="off">
         </div>
+        <div class="acc-v2-date-select" id="dateSelectCodexV2">
+          <button type="button" class="acc-v2-date-select-btn" id="btnDateFilterCodexV2" title="按凭证文件修改时间筛选日期范围">📅 日期筛选</button>
+          <div class="acc-v2-date-select-menu" id="dateFilterPanelCodexV2"></div>
+        </div>
+        <div class="hidden">
+          <input type="date" id="dateFromCodexV2">
+          <input type="date" id="dateToCodexV2">
+        </div>
         <button type="button" class="jobs-tb-btn" id="btnRefreshCodexV2" title="重新加载 Codex 凭证列表">刷新</button>
       </div>
       <div class="jobs-toolbar-v2" id="codexToolbarV2">
+        <button type="button" class="jobs-tb-btn" id="showArchivedCodexV2" aria-pressed="false" title="默认只显示未归档凭证；开启后单独查看归档凭证">查看归档</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCodexDownloadBulkV2" disabled title="把选中的多个本地凭证打包成一个 JSON 文件下载（备份/迁移用，CPA 不能直接读，需先解包）">下载本地</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCodexDownloadBulkCpaV2" disabled title="从 CPA auth-files 下载选中账号的真实 Codex JSON，并打包成 ZIP（可直接解压放入 CPA auth-dir）">从CPA下载</button>
+        <button type="button" class="jobs-tb-btn" id="btnCodexArchiveBulkV2" disabled title="归档选中的 Codex 授权凭证；默认列表不再显示">归档选中</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnCodexDeleteBulkV2" disabled title="删除选中的本地 Codex JSON 凭证文件">删除选中</button>
       </div>
       <div class="codex-table-v2-wrap">
@@ -4258,6 +4402,12 @@ function closeRetryLogModal() {
   $('#retryLogPanel').classList.add('hidden');
   updateModalScrollLock();
 }
+function closeLiveLogModal() {
+  liveLogEmail = null;
+  clearInterval(liveLogTimer);
+  $('#liveLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
 function openQrModal(url) {
   $('#qrImage').src = url;
   $('#qrOpenLink').href = url;
@@ -4409,7 +4559,7 @@ function openLog(jobId) {
   $('#logContent').textContent = '加载中…';
   pollLog();
   clearInterval(logTimer);
-  logTimer = setInterval(pollLog, 2000);
+  logTimer = setInterval(pollLog, 5000);
 }
 async function pollLog() {
   if (activeLogJob == null) return;
@@ -4434,6 +4584,10 @@ function getAccountsQuery() {
   const el = document.getElementById('qAccountsV2');
   return (el ? el.value : '').trim();
 }
+function getAccountsCodexFilter() {
+  const el = document.getElementById('codexStatusFilterV2');
+  return (el ? el.value : '').trim();
+}
 function getCodexBulkWorkers() {
   const el = document.getElementById('codexBulkWorkersV2');
   return Math.max(1, Math.min(16, Number((el && el.value) || 3)));
@@ -4444,9 +4598,12 @@ async function loadAccounts() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const codex = getAccountsCodexFilter();
     const q = getAccountsQuery();
+    const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
+    const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -4468,9 +4625,10 @@ async function pollAccountPlanStatuses(forceMerge = false) {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const codex = getAccountsCodexFilter();
     const q = getAccountsQuery();
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -4562,7 +4720,7 @@ function _codexCell(r) {
   if (s === 'stopped') return `<span class="pill status-used"${titleAttr}>已停止</span>`;
   if (s === 'failed') return `<span class="pill status-failed"${titleAttr}>失败</span>`;
   if (s === 'skipped') return `<span class="pill status-used">已跳过</span>`;
-  if (s === 'deactivated') return `<span class="pill status-failed" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
+  if (s === 'deactivated') return `<span class="pill status-failed" title="授权记录显示账号异常，建议通过查活确认账号状态">失败</span>`;
   return `<span class="muted">-</span>`;
 }
 function _codexCellV2(r) {
@@ -4574,7 +4732,7 @@ function _codexCellV2(r) {
   if (s === 'stopped') return `<span class="acc-v2-codex is-mute"${titleAttr}>已停止</span>`;
   if (s === 'failed') return `<span class="acc-v2-codex is-fail"${titleAttr}>失败</span>`;
   if (s === 'skipped') return `<span class="acc-v2-codex is-skip"${titleAttr}>已跳过</span>`;
-  if (s === 'deactivated') return `<span class="acc-v2-codex is-fail" title="账号已被 OpenAI 删除/停用/封禁，无法授权">已废号</span>`;
+  if (s === 'deactivated') return `<span class="acc-v2-codex is-fail" title="授权记录显示账号异常，建议通过查活确认账号状态">失败</span>`;
   return `<span class="acc-v2-muted">-</span>`;
 }
 function _codexAgentCell(r) {
@@ -5049,15 +5207,27 @@ function _codexAction(r) {
   return `<button data-codex-retry="${esc(r.email)}" title="重新跑一次 Codex 授权（会消耗 1 封邮箱 OTP + 1 个接码短信）">${label}</button>`;
 }
 function _tokenCellV2(r) {
+  const live = r.live_check_status || '';
+  const liveErr = r.live_check_error || '';
+  const liveAt = r.live_checked_at || '';
+  let liveHtml = '';
+  const liveFp = r.live_check_fingerprint_text || '';
+  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc([liveAt, liveFp].filter(Boolean).join('\n'))}">查活: 正常${liveFp ? ` · ${esc(liveFp)}` : ''}</div>`;
+  else if (live === 'queued') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 排队</div>`;
+  else if (live === 'running') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 运行中</div>`;
+  else if (live === 'deactivated') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#f56c6c">查活: 已废</div>`;
+  else if (live === 'failed') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#e6a23c">查活: 失败</div>`;
   if (r.has_access_token) {
-    return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 Token">复制</button>`;
+    return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 Token">复制</button>${liveHtml}`;
   }
-  return `<span class="pill status-failed">无Token</span>`;
+  return `<span class="pill status-failed">无Token</span>${liveHtml}`;
 }
 function _accountsV2MoreMenu(r) {
   const parts = [
     `<button type="button" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>`,
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
+    `<button type="button" data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
+    `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     _planAction(r),
     _trialAction(r),
     _extractLinkAction(r),
@@ -5161,7 +5331,7 @@ function updateAccountSelectionUi(pageRows = null) {
     'btnCheckSelectedPlansV2', 'btnCheckSelectedTrialsV2', 'btnExtractSelectedLinksV2',
     'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
-    'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnExportSelectedEmailsV2',
+    'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2', 'btnExportSelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
     'btnMoMoSelectedV2', 'btnGCashSelectedV2',
     'btnKakaoSelectedV2', 'btnPaypalSelectedV2',
@@ -5199,7 +5369,7 @@ function openRetryLog(email) {
   $('#retryLogContent').textContent = '加载中…';
   pollRetryLog();
   clearInterval(retryLogTimer);
-  retryLogTimer = setInterval(pollRetryLog, 2000);
+  retryLogTimer = setInterval(pollRetryLog, 5000);
 }
 async function pollRetryLog() {
   if (!retryLogEmail) return;
@@ -5217,6 +5387,34 @@ async function pollRetryLog() {
 }
 $('#btnCloseRetryLog').addEventListener('click', closeRetryLogModal);
 
+// ---------- 查活日志面板 ----------
+let liveLogEmail = null, liveLogTimer = null;
+
+function openLiveLog(email) {
+  liveLogEmail = email;
+  $('#liveLogEmail').textContent = email;
+  $('#liveLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#liveLogContent').textContent = '加载中…';
+  pollLiveLog();
+  clearInterval(liveLogTimer);
+  liveLogTimer = setInterval(pollLiveLog, 5000);
+}
+async function pollLiveLog() {
+  if (!liveLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/live-check-log?email=${encodeURIComponent(liveLogEmail)}`);
+    const c = $('#liveLogContent');
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (!r.running) {
+      clearInterval(liveLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+$('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
@@ -5299,6 +5497,18 @@ async function onAccountsBodyClick(e) {
   const planBtn = e.target.closest('[data-plan-check]');
   if (planBtn) {
     await checkOnePlan(Number(planBtn.dataset.planCheck), planBtn);
+    return;
+  }
+
+  const liveBtn = e.target.closest('[data-account-live-check]');
+  if (liveBtn) {
+    await checkSelectedLive([Number(liveBtn.dataset.accountLiveCheck)], liveBtn);
+    return;
+  }
+
+  const liveLogBtn = e.target.closest('[data-account-live-log]');
+  if (liveLogBtn) {
+    openLiveLog(liveLogBtn.dataset.accountLiveLog);
     return;
   }
 
@@ -5450,7 +5660,7 @@ async function onAccountsBodyClick(e) {
     const poll = setInterval(async () => {
       const acc = ACCOUNTS.find(a => a.email === email);
       if (!acc || acc.codex_status !== 'retrying') clearInterval(poll);
-    }, 5000);
+    }, 15000);
     setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
   } catch(err) {
     showToast('触发补跑失败: ' + err.message);
@@ -5532,6 +5742,12 @@ async function refreshAccountsList(btn) {
     PAGERS.accounts.page = 1;
     loadAccounts();
   }, 250));
+  const codexV2 = $('#codexStatusFilterV2');
+  if (codexV2) codexV2.addEventListener('change', () => {
+    ACCOUNT_SELECTED.clear();
+    PAGERS.accounts.page = 1;
+    loadAccounts();
+  });
 
   const archivedV2 = $('#showArchivedAccountsV2');
   if (archivedV2) archivedV2.addEventListener('click', () => {
@@ -5543,6 +5759,14 @@ async function refreshAccountsList(btn) {
   });
   const refreshV2 = $('#btnRefreshAccountsV2');
   if (refreshV2) refreshV2.addEventListener('click', () => refreshAccountsList(refreshV2));
+
+  bindDateFilterPanel({
+    btnId: 'btnDateFilterAccountsV2',
+    panelId: 'dateFilterPanelAccountsV2',
+    fromId: 'dateFromAccountsV2',
+    toId: 'dateToAccountsV2',
+    onApply: () => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); },
+  });
 })();
 
 
@@ -5580,6 +5804,165 @@ async function exportSelectedAccountEmails() {
     copyText(lines.join('\n'));
     showToast(`已导出 ${lines.length} 个邮箱（邮箱池素材格式）`);
   } catch(err) { showToast('导出邮箱失败: ' + err.message); }
+}
+
+async function copySelectedAccountTokens() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  try {
+    const lines = await fetchAccountSecrets(ids, 'access_token');
+    if (!lines.length) { showToast('选中账号没有可复制 Token'); return; }
+    copyText(lines.join('\n'));
+    showToast(`已复制 ${lines.length} 个 Token`);
+  } catch(err) { showToast('复制失败: ' + err.message); }
+}
+
+function bindDateFilterPanel({ btnId, panelId, fromId, toId, onApply }) {
+  const btn = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  if (!btn || !panel) return;
+  const wrap = panel.closest('.acc-v2-date-select');
+  const now = new Date();
+  let viewY = now.getFullYear();
+  let viewM = now.getMonth();
+  let start = document.getElementById(fromId)?.value || '';
+  let end = document.getElementById(toId)?.value || '';
+  let openSnapshot = { start, end };
+  let dirty = false;
+  if (start) { const d = new Date(start); viewY = d.getFullYear(); viewM = d.getMonth(); }
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const setHidden = () => {
+    const f = document.getElementById(fromId); if (f) f.value = start;
+    const t = document.getElementById(toId); if (t) t.value = end;
+  };
+  const syncBtnText = () => {
+    btn.textContent = (start || end) ? `📅 ${start || '…'} ~ ${end || '…'}` : '📅 日期筛选';
+  };
+  const close = () => {
+    if (wrap) wrap.classList.remove('open');
+    else panel.classList.remove('open');
+    // 只选了开始/结束其中一端就关闭 → 还原到打开前的完整状态，避免留下残缺筛选
+    if (dirty && !(start && end)) {
+      start = openSnapshot.start;
+      end = openSnapshot.end;
+      setHidden();
+      syncBtnText();
+    }
+    dirty = false;
+  };
+
+  const render = () => {
+    const y = viewY, m = viewM;
+    const firstDay = new Date(y, m, 1);
+    const dim = new Date(y, m + 1, 0).getDate();
+    const lead = firstDay.getDay();
+    const cells = [];
+    for (let i = lead - 1; i >= 0; i--) cells.push({ d: new Date(y, m, -i), other: true });
+    for (let day = 1; day <= dim; day++) cells.push({ d: new Date(y, m, day), other: false });
+    let tail = 1;
+    while (cells.length % 7 !== 0) cells.push({ d: new Date(y, m + 1, tail++), other: true });
+    panel.innerHTML = `
+      <div class="cal">
+        <div class="cal-head">
+          <button type="button" class="cal-nav" data-cal-nav="-1" title="上个月">‹</button>
+          <span class="cal-title">${y}年${m + 1}月</span>
+          <button type="button" class="cal-nav" data-cal-nav="1" title="下个月">›</button>
+        </div>
+        <div class="cal-week">${['日', '一', '二', '三', '四', '五', '六'].map(w => `<span>${w}</span>`).join('')}</div>
+        <div class="cal-grid">
+          ${cells.map(({ d, other }) => {
+            const ds = fmt(d);
+            const cls = ['cal-cell'];
+            if (other) cls.push('other');
+            if (start && end && ds > start && ds < end) cls.push('in-range');
+            if (ds === start || ds === end) cls.push(ds === start && ds === end ? 'start end' : (ds === start ? 'start' : 'end'));
+            return `<button type="button" class="${cls.join(' ')}" data-date="${ds}" data-other="${other ? 1 : 0}">${d.getDate()}</button>`;
+          }).join('')}
+        </div>
+        <div class="cal-foot">
+          <div class="cal-foot-btns">
+            <button type="button" class="jobs-tb-btn" data-quick-date="today">今天</button>
+            <button type="button" class="jobs-tb-btn" data-quick-date="yesterday">昨天</button>
+            <button type="button" class="jobs-tb-btn" data-quick-date="3d">近3天</button>
+            <button type="button" class="jobs-tb-btn" data-quick-date="7d">近7天</button>
+          </div>
+          <div class="cal-foot-tip">双击某个日期，只看当天</div>
+        </div>
+      </div>`;
+    panel.querySelectorAll('[data-cal-nav]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      viewM += Number(b.dataset.calNav);
+      if (viewM < 0) { viewM = 11; viewY--; }
+      if (viewM > 11) { viewM = 0; viewY++; }
+      render();
+    }));
+    panel.querySelectorAll('[data-date]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ds = b.dataset.date;
+      if (b.dataset.other === '1') {
+        const d = new Date(ds);
+        viewY = d.getFullYear(); viewM = d.getMonth();
+      }
+      dirty = true;
+      if (!start || (start && end)) { start = ds; end = ''; }
+      else { end = ds; if (end < start) [start, end] = [end, start]; }
+      setHidden();
+      syncBtnText();
+      if (start && end) { close(); if (onApply) onApply(); }
+      else render();
+    }));
+    panel.querySelectorAll('[data-date]').forEach(b => b.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      start = b.dataset.date;
+      end = start;
+      dirty = false;
+      setHidden();
+      syncBtnText();
+      close();
+      if (onApply) onApply();
+    }));
+    panel.querySelectorAll('[data-quick-date]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const en = new Date();
+      const st = new Date();
+      const k = b.dataset.quickDate;
+      if (k === 'yesterday') { st.setDate(st.getDate() - 1); en.setDate(en.getDate() - 1); }
+      else if (k === '3d') st.setDate(st.getDate() - 2);
+      else if (k === '7d') st.setDate(st.getDate() - 6);
+      start = fmt(st); end = fmt(en);
+      dirty = false;
+      setHidden(); syncBtnText(); close(); if (onApply) onApply();
+    }));
+  };
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = wrap ? !wrap.classList.contains('open') : !panel.classList.contains('open');
+    close();
+    if (willOpen) {
+      openSnapshot = { start, end };
+      dirty = false;
+      if (wrap) wrap.classList.add('open');
+      render();
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest(`#${btnId}, #${panelId}`)) return;
+    close();
+  });
+  syncBtnText();
+}
+
+function copySelectedAccountEmails() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  const emails = ACCOUNTS
+    .filter(r => ids.includes(Number(r.id)))
+    .map(r => (r.email || '').trim())
+    .filter(Boolean);
+  if (!emails.length) { showToast('选中账号没有可复制的邮箱'); return; }
+  copyText(emails.join('\n'));
+  showToast(`已复制 ${emails.length} 个邮箱`);
 }
 
 async function downloadSelectedAccountTxt() {
@@ -6069,6 +6452,43 @@ async function checkSelectedPlans() {
   }
 }
 
+async function checkSelectedLive(idsArg = null, btnArg = null) {
+  const ids = idsArg || Array.from(ACCOUNT_SELECTED);
+  if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const workers = getCodexBulkWorkers();
+  const msg = idsArg ? `确定查活这个账号并刷新最新 AT/accessToken 吗？` : `确定查活选中的 ${ids.length} 个账号吗？\n\n会重新登录邮箱 OTP；登录成功且未封号则标记正常，并刷新最新 AT/accessToken。\n\n并发线程数：${workers}`;
+  if (!confirm(msg)) return;
+  const firstAcc = ACCOUNTS.find(a => Number(a.id) === Number(ids[0]));
+  const btn = btnArg || $('#btnCheckSelectedLiveV2');
+  const old = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '查活中…';
+  }
+  try {
+    const r = await api('/api/accounts/check-live-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids, workers}),
+    });
+    const skipped = (r.skipped || []).length;
+    showToast(`查活已入队 ${r.started_count || 0} 个，忙碌 ${r.busy_count || 0} 个，失败 ${r.failed_count || 0}${skipped ? `，跳过 ${skipped}` : ''}`);
+    const firstStarted = (r.started || [])[0];
+    if (firstStarted?.email) openLiveLog(firstStarted.email);
+    else if (firstAcc && firstAcc.email) openLiveLog(firstAcc.email);
+    await loadAccounts();
+    loadSummary();
+  } catch(err) {
+    showToast('查活失败: ' + err.message);
+    updateAccountSelectionUi();
+  } finally {
+    if (btn) {
+      btn.textContent = old;
+      btn.disabled = false;
+    }
+  }
+}
+
 async function checkSelectedTrials(region = 'jp') {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
@@ -6469,7 +6889,7 @@ async function retrySelectedCodex() {
   if (workersElV2) workersElV2.value = workers;
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const retryingCount = selectedAccounts.filter(a => (a.codex_status || '') === 'retrying').length;
-  const deactivatedCount = selectedAccounts.filter(a => (a.codex_status || '') === 'deactivated').length;
+  const deactivatedCount = selectedAccounts.filter(a => (a.live_check_status || '') === 'deactivated').length;
   let msg = `批量补跑选中的 ${ids.length} 个账号 Codex 授权？
 
 并发线程数：${workers}
@@ -6493,7 +6913,7 @@ async function retrySelectedCodex() {
     loadAccounts();
     const first = (r.started || [])[0];
     if (first && first.email) openRetryLog(first.email);
-    const poll = setInterval(loadAccounts, 5000);
+    const poll = setInterval(loadAccounts, 15000);
     setTimeout(() => clearInterval(poll), 10 * 60 * 1000);
   } catch(err) {
     showToast('批量补跑失败: ' + err.message);
@@ -6510,16 +6930,6 @@ async function copyCurrentPageLines() {
   const ids = ACCOUNTS.map(r => Number(r.id));
   if (!ids.length) { showToast('当前页没有账号'); return; }
   try { copyText((await fetchAccountSecrets(ids, 'copy_line')).join('\n')); } catch(e) { showToast('复制失败: ' + e.message); }
-}
-async function copySelectedAccountTokens() {
-  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
-  if (!ids.length) { showToast('请先选择账号'); return; }
-  try {
-    const lines = await fetchAccountSecrets(ids, 'access_token');
-    if (!lines.length) { showToast('选中账号没有可复制 Token'); return; }
-    copyText(lines.join('\n'));
-    showToast(`已复制 ${lines.length} 个 Token`);
-  } catch(e) { showToast('复制失败: ' + e.message); }
 }
 (function bindAccountsToolbarV2() {
   const bind = (id, fn) => {
@@ -6583,6 +6993,8 @@ async function copySelectedAccountTokens() {
   bind('btnNoteSelectedAccountsV2', noteSelectedAccounts);
   bind('btnCopySelectedLinesV2', copySelectedAccountLines);
   bind('btnExportSelectedEmailsV2', exportSelectedAccountEmails);
+  bind('btnCopySelectedTokensV2', copySelectedAccountTokens);
+  bind('btnCopySelectedEmailsV2', copySelectedAccountEmails);
   bind('btnCopyAllTokensV2', copyCurrentPageTokens);
   bind('btnCopyAllLinesV2', copyCurrentPageLines);
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
@@ -7814,11 +8226,15 @@ function getCodexQuery() {
   const el = document.getElementById('qCodexV2');
   return (el ? el.value : '').trim();
 }
+let CODEX_SHOW_ARCHIVED = false;
 async function loadCodex() {
   try {
     const p = PAGERS.codex;
     const q = getCodexQuery();
-    const r = await api(`/api/codex?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&q=${encodeURIComponent(q)}`);
+    const archived = CODEX_SHOW_ARCHIVED ? 'only' : '0';
+    const dateFrom = document.getElementById('dateFromCodexV2')?.value || '';
+    const dateTo = document.getElementById('dateToCodexV2')?.value || '';
+    const r = await api(`/api/codex?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&q=${encodeURIComponent(q)}&archived=${encodeURIComponent(archived)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     CODEX = r.accounts || [];
     CODEX_TOTAL = Number(r.total || CODEX.length || 0);
     const totalPages = Math.max(1, Math.ceil(CODEX_TOTAL / p.size));
@@ -7833,6 +8249,12 @@ async function loadCodex() {
 const CODEX_SELECTED = new Set();
 function _codexUpdateSelectedHint() {
   const none = CODEX_SELECTED.size === 0;
+  const archiveBtn = document.getElementById('btnCodexArchiveBulkV2');
+  if (archiveBtn) {
+    archiveBtn.disabled = none;
+    archiveBtn.textContent = CODEX_SHOW_ARCHIVED ? '恢复选中' : '归档选中';
+    archiveBtn.title = CODEX_SHOW_ARCHIVED ? '把选中的归档凭证恢复到默认列表' : '归档选中的 Codex 授权凭证；默认列表不再显示';
+  }
   ['btnCodexDownloadBulkV2', 'btnCodexDownloadBulkCpaV2', 'btnCodexDeleteBulkV2'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = none;
@@ -7894,12 +8316,13 @@ function renderCodex() {
     const moreItems = [
       `<button type="button" class="good" data-codex-download-cpa="${esc(r.filename)}" title="按邮箱从 CPA auth-files 下载真实 Codex JSON">从CPA下载</button>`,
       exported ? `<button type="button" data-codex-reset="${esc(r.filename)}" title="重新标记为未导出">重置标记</button>` : '',
+      `<button type="button" class="${r.archived ? 'good' : ''}" data-codex-archive="${esc(r.filename)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认 Codex 列表' : '归档后默认列表不再显示'}">${r.archived ? '恢复' : '归档'}</button>`,
     ].filter(Boolean).join('');
     return `
     <tr>
       <td class="col-check"><input type="checkbox" class="codex-row-check" data-fname="${esc(r.filename)}" ${checked}></td>
       <td class="col-email" title="${esc(r.email || '')}">
-        <div class="acc-v2-email">${esc(r.email || '-')}</div>
+        <div class="acc-v2-email">${esc(r.email || '-')}${r.archived ? ' <span class="pill status-used" title="已归档">归档</span>' : ''}</div>
         <div class="acc-v2-sub" title="${esc(r.filename)}">${esc(r.filename)}</div>
       </td>
       <td class="col-plan">${esc(r.plan || '-')}</td>
@@ -8014,6 +8437,47 @@ async function onCodexBodyClick(e) {
       loadCodex();
     } catch(err) { showToast('重置失败: ' + err.message); }
   }
+  const ar = e.target.closest('[data-codex-archive]');
+  if (ar) {
+    const fname = ar.dataset.codexArchive;
+    const archived = ar.dataset.archived === '1';
+    ar.disabled = true;
+    try {
+      await api('/api/codex/archive', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: fname, archived}) });
+      CODEX_SELECTED.delete(fname);
+      showToast(archived ? '已归档' : '已恢复');
+      loadCodex();
+    } catch(err) {
+      showToast('归档失败: ' + err.message);
+      ar.disabled = false;
+    }
+  }
+}
+async function codexArchiveSelected() {
+  if (CODEX_SELECTED.size === 0) return;
+  const filenames = Array.from(CODEX_SELECTED);
+  const archived = !CODEX_SHOW_ARCHIVED;
+  if (!confirm(`${archived ? '归档' : '恢复'}选中的 ${filenames.length} 个 Codex 授权凭证？`)) return;
+  try {
+    const r = await api('/api/codex/archive-bulk', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({filenames, archived}),
+    });
+    (r.updated || []).forEach(item => CODEX_SELECTED.delete(item.filename));
+    showToast(`${archived ? '归档' : '恢复'}成功 ${r.updated_count || 0} 个`);
+    loadCodex();
+  } catch(err) { showToast('归档失败: ' + err.message); }
+}
+function applyCodexArchivedFilter(on) {
+  CODEX_SHOW_ARCHIVED = !!on;
+  const btn = document.getElementById('showArchivedCodexV2');
+  if (btn) {
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('is-active', on);
+  }
+  CODEX_SELECTED.clear();
+  PAGERS.codex.page = 1;
+  loadCodex();
 }
 async function codexDownloadBulkLocal() {
   if (CODEX_SELECTED.size === 0) return;
@@ -8125,9 +8589,19 @@ async function codexDeleteBulk() {
   }
   const refreshV2 = $('#btnRefreshCodexV2');
   if (refreshV2) refreshV2.addEventListener('click', loadCodex);
+  const archivedV2 = $('#showArchivedCodexV2');
+  if (archivedV2) archivedV2.addEventListener('click', () => applyCodexArchivedFilter(!CODEX_SHOW_ARCHIVED));
+  bindDateFilterPanel({
+    btnId: 'btnDateFilterCodexV2',
+    panelId: 'dateFilterPanelCodexV2',
+    fromId: 'dateFromCodexV2',
+    toId: 'dateToCodexV2',
+    onApply: () => { PAGERS.codex.page = 1; loadCodex(); },
+  });
   const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   bind('btnCodexDownloadBulkV2', codexDownloadBulkLocal);
   bind('btnCodexDownloadBulkCpaV2', codexDownloadBulkCpa);
+  bind('btnCodexArchiveBulkV2', codexArchiveSelected);
   bind('btnCodexDeleteBulkV2', codexDeleteBulk);
   document.addEventListener('click', (e) => {
     if (e.target.closest('.codex-table-v2 .acc-v2-more')) return;
@@ -8329,6 +8803,15 @@ function getRegistrationDriverValue() {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   return String(fv == null ? 'protocol' : fv).trim().toLowerCase() || 'protocol';
 }
+function getAutoPlanCheckField() {
+  return (CONFIG || []).find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') || null;
+}
+function getAutoPlanCheckValue() {
+  const f = getAutoPlanCheckField();
+  if (!f) return false;
+  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
+  return !!fv;
+}
 function registrationDriverLabel(value) {
   const cur = String(value || '').trim().toLowerCase();
   const hit = registrationDriverChoices().find(c => String(c.value) === cur);
@@ -8382,7 +8865,7 @@ function renderRegistrationDriverCard() {
     labelEl.textContent = label;
     labelEl.classList.toggle('is-placeholder', !label || label === '—');
   }
-  if (hintEl) hintEl.textContent = `驱动标识: ${cur}`;
+  if (hintEl) hintEl.textContent = `驱动标识: ${cur} · 自动查套餐: ${getAutoPlanCheckValue() ? '开' : '关'}`;
 }
 function renderRegistrationDriverField(f) {
   return `
@@ -8391,6 +8874,16 @@ function renderRegistrationDriverField(f) {
       <span class="hint">选择注册所用的自动化方式</span>
       <div class="config-ep-select" id="configRegistrationSelectV2"></div>
     </label>
+  `;
+}
+function renderRegistrationSettingsSection(fields) {
+  const driver = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
+  const autoPlan = fields.find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER');
+  return `
+    <div class="config-section-v2-body config-section-v2-body--single">
+      ${driver ? renderRegistrationDriverField(driver) : '<div class="banner warn">未找到注册方式配置项</div>'}
+    </div>
+    ${autoPlan ? `<div class="config-switches-v2" style="margin-top:14px;">${renderFeatureSwitchField(autoPlan, { withIcon: false })}</div>` : ''}
   `;
 }
 function renderFeatureSwitchField(f, opts = {}) {
@@ -8719,13 +9212,10 @@ function renderConfigSectionV2(name, fields) {
     `;
   }
   if (name === '注册方式') {
-    const field = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
     return `
       <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
         ${renderConfigSectionHead(name, configSectionIntro(name))}
-        <div class="config-section-v2-body config-section-v2-body--single">
-          ${field ? renderRegistrationDriverField(field) : '<div class="banner warn">未找到注册方式配置项</div>'}
-        </div>
+        ${renderRegistrationSettingsSection(fields)}
         <div class="config-section-v2-actions">
           <button type="button" class="btn primary" data-save-config-v2>保存</button>
         </div>
@@ -8957,6 +9447,7 @@ function trackConfigFieldChange(e) {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+  if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') renderRegistrationDriverCard();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);
@@ -8996,9 +9487,9 @@ document.addEventListener('click', (e) => {
 // ---------- 初始化 ----------
 loadSummary();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
-jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
-setInterval(loadSummary, 5000);
-setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
+jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 10000);
+setInterval(loadSummary, 30000);
+setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 10000);
 </script>
 </body>
 </html>

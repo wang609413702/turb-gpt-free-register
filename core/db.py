@@ -51,6 +51,10 @@ _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
 _LEGACY_ACCOUNTS_JSON = _LEGACY_DATA_DIR / "registered_accounts.json"
 _LEGACY_JOBS_JSON = _LEGACY_DATA_DIR / "registration_jobs.json"
 _LOCK = threading.RLock()
+_VIEWER_DEBOUNCE_SECONDS = 3.0
+_VIEWER_REFRESH_LOCK = threading.Lock()
+_VIEWER_REFRESH_TIMER: threading.Timer | None = None
+_VIEWER_REFRESH_REASON = ""
 
 
 def _now() -> str:
@@ -465,6 +469,44 @@ render();
             return fallback
 
 
+def _run_debounced_static_viewer_refresh() -> None:
+    """后台刷新静态账号查看页。
+
+    WebUI 的实时列表不依赖 accounts_viewer.html；把它从保存路径上移走，
+    避免注册/查活/Codex/套餐状态高频写入时，反复生成大 HTML 并阻塞查询 API。
+    """
+    global _VIEWER_REFRESH_TIMER, _VIEWER_REFRESH_REASON
+    with _VIEWER_REFRESH_LOCK:
+        _VIEWER_REFRESH_TIMER = None
+        reason = _VIEWER_REFRESH_REASON
+        _VIEWER_REFRESH_REASON = ""
+    try:
+        with _LOCK:
+            outlook_rows = _load_outlook()
+            account_rows = _load_accounts()
+            _render_static_viewer(outlook_rows=outlook_rows, account_rows=account_rows)
+    except Exception:
+        # 静态查看页只是旁路产物，失败不应影响主流程。
+        try:
+            import logging
+            logging.getLogger(__name__).exception("后台刷新 accounts_viewer.html 失败: %s", reason or "-")
+        except Exception:
+            pass
+
+
+def _schedule_static_viewer_refresh(reason: str = "") -> None:
+    """防抖刷新静态查看页：短时间内多次保存只生成一次 HTML。"""
+    global _VIEWER_REFRESH_TIMER, _VIEWER_REFRESH_REASON
+    with _VIEWER_REFRESH_LOCK:
+        _VIEWER_REFRESH_REASON = reason or _VIEWER_REFRESH_REASON
+        if _VIEWER_REFRESH_TIMER is not None:
+            _VIEWER_REFRESH_TIMER.cancel()
+        timer = threading.Timer(_VIEWER_DEBOUNCE_SECONDS, _run_debounced_static_viewer_refresh)
+        timer.daemon = True
+        _VIEWER_REFRESH_TIMER = timer
+        timer.start()
+
+
 def _load_outlook() -> list[dict]:
     rows = _read_json(_OUTLOOK_JSON, None)
     if not isinstance(rows, list):
@@ -475,7 +517,7 @@ def _load_outlook() -> list[dict]:
 def _save_outlook(rows: list[dict]) -> None:
     _write_json(_OUTLOOK_JSON, rows)
     _sync_outlook_txt(rows)
-    _render_static_viewer(outlook_rows=rows)
+    _schedule_static_viewer_refresh("save_outlook")
 
 
 def _load_generic_api_emails() -> list[dict]:
@@ -511,7 +553,7 @@ def _save_accounts(rows: list[dict], sync_artifacts: bool = True) -> None:
         return
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
-    _render_static_viewer(account_rows=rows)
+    _schedule_static_viewer_refresh("save_accounts")
 
 
 def _load_jobs() -> list[dict]:
@@ -707,6 +749,12 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
             return False
         row["codex_status"] = codex_status
         row["codex_error"] = codex_error
+        if str(codex_status or "").strip().lower() == "deactivated":
+            # Codex 授权阶段判定为 deactivated，按账号废号处理，便于账号列表统一筛选。
+            row["live_check_status"] = "deactivated"
+            row["live_check_ok"] = False
+            row["live_check_error"] = codex_error or "Codex 授权判定账号已废号"
+            row["live_checked_at"] = _now()
         row["updated_at"] = _now()
         _save_accounts(accounts, sync_artifacts=False)
         return True
@@ -2098,7 +2146,46 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
     return True
 
 
-def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def _parse_iso_dt(value: str | None, end_of_day: bool = False) -> datetime | None:
+    """宽松解析 ISO 日期/时间字符串；支持 YYYY-MM-DD 或完整 ISO；解析失败返回 None。
+
+    end_of_day=True 时，纯日期（YYYY-MM-DD）按当天 23:59:59.999999 解析，
+    用于 date_to 过滤（保证包含截止当天）；完整时间串原样返回。
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        if len(text) == 10 and text[4] == "-":
+            if end_of_day:
+                return datetime.fromisoformat(text + "T23:59:59.999999")
+            return datetime.fromisoformat(text + "T00:00:00")
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _matches_codex_status_filter(row: dict, codex_filter: str | None) -> bool:
+    codex_filter = str(codex_filter or "").strip().lower()
+    if not codex_filter:
+        return True
+    status = str(row.get("codex_status") or "").strip().lower()
+    live_status = str(row.get("live_check_status") or "").strip().lower()
+    if codex_filter in {"all", "*"}:
+        return True
+    if codex_filter == "deactivated":
+        return live_status == "deactivated"
+    return status == codex_filter
+
+
+def _filtered_decorated_accounts(
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    codex_filter: str | None = None,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
         rows = [r for r in rows if bool(r.get("archived"))]
@@ -2108,11 +2195,35 @@ def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filte
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
+    decorated = [r for r in decorated if _matches_codex_status_filter(r, codex_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
+    # 按创建时间筛选（date_from/date_to 为 ISO 字符串或 YYYY-MM-DD）
+    if date_from or date_to:
+        d_from = _parse_iso_dt(date_from)
+        d_to = _parse_iso_dt(date_to, end_of_day=True)
+        if d_from or d_to:
+            filtered = []
+            for r in decorated:
+                ct = _parse_iso_dt(str(r.get("created_at") or ""))
+                if ct is None:
+                    continue
+                if d_from and ct < d_from:
+                    continue
+                if d_to and ct > d_to:
+                    continue
+                filtered.append(r)
+            decorated = filtered
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
 
-def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_account_plan_check_statuses(
+    limit: int = 5000,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    codex_filter: str | None = None,
+    q: str | None = None,
+) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
         "id", "email", "archived",
@@ -2121,6 +2232,7 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
+        "live_check_device_id", "live_check_proxy_used", "live_check_fingerprint_text",
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
@@ -2194,7 +2306,7 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "momo_check_network_route", "momo_check_proxy_used",
     )
     with _LOCK:
-        all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, codex_filter=codex_filter, q=q)
         total = len(all_rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -2270,15 +2382,33 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}:{revision_sig}"}
 
 
-def list_accounts(limit: int = 500, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def list_accounts(
+    limit: int = 500,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    codex_filter: str | None = None,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, codex_filter=codex_filter, q=q, date_from=date_from, date_to=date_to)
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
 
-def list_accounts_page(limit: int = 50, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_accounts_page(
+    limit: int = 50,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    codex_filter: str | None = None,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, codex_filter=codex_filter, q=q, date_from=date_from, date_to=date_to)
         total = len(rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -2309,6 +2439,118 @@ def update_account_note(acc_id: int, note: str) -> bool:
         now = _now()
         row["note"] = str(note or "")
         row["note_updated_at"] = now
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
+def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
+    """写回账号查活结果；成功时同步刷新最新 access_token 和账号基础信息。"""
+    result = result or {}
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+
+        now = _now()
+        ok = bool(result.get("ok"))
+        status = str(result.get("status") or ("live" if ok else "failed"))
+        row["live_check_status"] = status
+        row["live_check_ok"] = ok
+        row["live_checked_at"] = result.get("checked_at") or now
+        row["live_check_error"] = None if ok else result.get("error")
+        row["updated_at"] = now
+
+        if ok:
+            token = str(result.get("access_token") or "").strip()
+            if token:
+                row["access_token"] = token
+            session = result.get("session") or {}
+            user = session.get("user") or {}
+            account = session.get("account") or {}
+            if user.get("id"):
+                row["user_id"] = user.get("id")
+            if user.get("name") is not None:
+                row["user_name"] = user.get("name")
+            if account.get("planType"):
+                row["plan_type"] = account.get("planType")
+            if session.get("expires"):
+                row["expires_at"] = session.get("expires")
+            if result.get("device_id"):
+                row["device_id"] = result.get("device_id")
+            row["live_check_device_id"] = result.get("device_id") or row.get("live_check_device_id")
+            row["live_check_proxy_used"] = result.get("proxy_used") or row.get("live_check_proxy_used")
+            row["live_check_fingerprint_text"] = result.get("fingerprint_text") or row.get("live_check_fingerprint_text")
+            if result.get("fingerprint"):
+                row["live_check_fingerprint"] = result.get("fingerprint")
+            row["live_check_error"] = None
+
+        row["copy_line"] = _account_line(row)
+        _save_accounts(rows)
+        return True
+
+
+def claim_account_live_check(acc_id: int, trigger: str = "manual") -> bool:
+    """原子占用账号查活任务；已有 queued/running 时返回 False。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        if row.get("live_check_status") in {"queued", "running"}:
+            try:
+                stamp_key = "live_check_queued_at" if row.get("live_check_status") == "queued" else "live_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if row.get("live_check_status") == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row["live_check_status"] = "queued"
+        row["live_check_ok"] = False
+        row["live_check_trigger"] = str(trigger or "manual")
+        row["live_check_queued_at"] = now
+        row["live_check_started_at"] = None
+        row["live_checked_at"] = None
+        row["live_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
+def recover_interrupted_live_checks() -> int:
+    """服务启动时恢复上次进程中断的查活状态，避免 queued/running 卡死。"""
+    with _LOCK:
+        rows = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in rows:
+            if row.get("live_check_status") not in {"queued", "running"}:
+                continue
+            row["live_check_status"] = "failed"
+            row["live_check_ok"] = False
+            row["live_check_error"] = "WebUI 重启或任务异常中断，请重新查活"
+            row["live_checked_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(rows)
+        return recovered
+
+
+def mark_account_live_check_running(acc_id: int) -> bool:
+    """把账号查活任务标记为运行中。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("live_check_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row["live_check_status"] = "running"
+        row["live_check_started_at"] = now
+        row["live_check_error"] = None
         row["updated_at"] = now
         _save_accounts(rows)
         return True
@@ -2840,16 +3082,20 @@ def _save_codex_export_state(state: dict) -> None:
     _write_json(_CODEX_EXPORT_STATE, state)
 
 
-def list_codex_accounts() -> list[dict]:
+def list_codex_accounts(archived: str | bool | None = "0", date_from: str | None = None, date_to: str | None = None) -> list[dict]:
     """
     扫 codex_accounts/ 目录，每个 codex-*.json 是一条 CPA 兼容凭证。
     返回带元信息的列表（含导出状态、文件大小、token 预览等）。
+    archived: '0'=仅未归档（默认）/ 'only'=仅归档 / 'all'=全部；
+    date_from/date_to 按文件修改时间（mtime）筛选（ISO 或 YYYY-MM-DD）。
     """
     with _LOCK:
         out = []
         if not _CODEX_DIR.exists():
             return out
         export_state = _load_codex_export_state()
+        d_from = _parse_iso_dt(date_from)
+        d_to = _parse_iso_dt(date_to, end_of_day=True)
         for path in sorted(_CODEX_DIR.glob("codex-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 content = json.loads(path.read_text(encoding="utf-8"))
@@ -2857,6 +3103,20 @@ def list_codex_accounts() -> list[dict]:
                 continue
             fname = path.name
             es = export_state.get(fname) or {}
+            rec_archived = bool(es.get("archived"))
+            if archived in (True, "1", "true", "yes", "only"):
+                if not rec_archived:
+                    continue
+            elif archived in ("all", "include"):
+                pass
+            else:
+                if rec_archived:
+                    continue
+            mtime_dt = datetime.fromtimestamp(path.stat().st_mtime)
+            if d_from and mtime_dt < d_from:
+                continue
+            if d_to and mtime_dt > d_to:
+                continue
             # 从文件名抽 email 和 plan：codex-{email}.json 或 codex-{email}-{plan}.json
             stem = path.stem  # codex-邮箱-plan
             without_prefix = stem[len("codex-"):] if stem.startswith("codex-") else stem
@@ -2888,11 +3148,32 @@ def list_codex_accounts() -> list[dict]:
                 "expired": content.get("expired", ""),
                 "access_token_preview": (content.get("access_token", "") or "")[:32],
                 "size": path.stat().st_size,
-                "mtime": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+                "mtime": mtime_dt.isoformat(timespec="seconds"),
                 "exported_at": es.get("exported_at"),
                 "exported_count": es.get("exported_count", 0),
+                "archived": rec_archived,
+                "archived_at": es.get("archived_at"),
             })
         return out
+
+
+def archive_codex(filename: str, archived: bool = True) -> dict | None:
+    """归档/取消归档一条 Codex 授权凭证（状态记录在导出状态文件）。不存在返回 None。"""
+    with _LOCK:
+        if not filename.startswith("codex-") or not filename.endswith(".json"):
+            raise ValueError(f"非法文件名: {filename}")
+        if "/" in filename or "\\" in filename or ".." in filename:
+            raise ValueError(f"非法文件名: {filename}")
+        path = _CODEX_DIR / filename
+        if not path.exists() or not path.is_file():
+            return None
+        state = _load_codex_export_state()
+        rec = state.get(filename) or {}
+        rec["archived"] = bool(archived)
+        rec["archived_at"] = _now() if archived else None
+        state[filename] = rec
+        _save_codex_export_state(state)
+        return rec
 
 
 def read_codex_credential(filename: str) -> tuple[str, str]:
@@ -3310,6 +3591,12 @@ def storage_paths() -> dict:
 
 def refresh_static_viewer() -> Path:
     """手动刷新静态查看器，返回 HTML 路径。"""
+    global _VIEWER_REFRESH_TIMER, _VIEWER_REFRESH_REASON
+    with _VIEWER_REFRESH_LOCK:
+        if _VIEWER_REFRESH_TIMER is not None:
+            _VIEWER_REFRESH_TIMER.cancel()
+            _VIEWER_REFRESH_TIMER = None
+        _VIEWER_REFRESH_REASON = ""
     with _LOCK:
         outlook_rows = _load_outlook()
         account_rows = _load_accounts()
