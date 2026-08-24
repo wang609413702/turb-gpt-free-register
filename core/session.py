@@ -226,7 +226,11 @@ class BrowserSession:
             timezone = timezone.get("id") or timezone.get("name")
         return {
             "ip": data.get("ip") or data.get("query"),
-            "country": (data.get("country") or data.get("country_code") or data.get("countryCode") or "").upper(),
+            # 优先两位国家码（PH/KR/VN…），再回退到全称（South Korea…）。
+            "country": (
+                data.get("country_code") or data.get("countryCode")
+                or data.get("cc") or data.get("country") or ""
+            ).upper(),
             "region": data.get("region") or data.get("regionName"),
             "city": data.get("city"),
             "timezone": timezone or "",
@@ -413,6 +417,12 @@ class BrowserSession:
         """
         获取 sentinel.openai.com 的请求头。
         用于步骤6、9、11。
+
+        注意：sentinel iframe 请求只发基础头 + 低熵 sec-ch-ua，不带 oai-client-*
+        / oai-device-id / oai-session-id / x-datadog-* / traceparent 等。
+        （2026-08-14 真实浏览器 HAR 采集确认：sentinel/req 这些头一个都没有，
+        若多发会被识别为自动化特征。）因此这里不再调用 _attach_frontend_api_headers。
+        设备 ID 已在请求体（build_sentinel_request_body 的 id 字段）和 oai-did cookie 中。
         """
         from config import SENTINEL_SV
         headers = self._get_common_headers()
@@ -426,7 +436,7 @@ class BrowserSession:
             "sec-fetch-dest": "empty",
             "priority": "u=1, i",
         })
-        return self._attach_frontend_api_headers(headers)
+        return headers
 
 
     @staticmethod

@@ -43,6 +43,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+node_modules/
+
+# ZCode 本地计划草稿
+.zcode/plans/
+
+# 支付链接运行记录 / 代理缓存（可能包含运行态账号、代理或链接数据）
+*_proxy_cache.json
+*_records.json
 
 # 历史调试输出（_xxx.out / _xxx_dump.html）
 tools/_*.out
@@ -57,6 +65,10 @@ sentinel-challenge-*.json
 sentinel.config.json
 tools/sentinel.config.json
 sentinel/sentinel.config.json
+
+# Roxy 注册流程 HAR 采集产物（可能含登录态 cookie / 请求体）
+har_captures/
+docs/protocol_har_summary_*.json
 
 # 意外生成的本地目录
 -/

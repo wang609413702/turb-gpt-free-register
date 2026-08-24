@@ -14,6 +14,7 @@ from config import twofa as _twofa_cfg
 from core.account_export import save_account_data
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
+from core.openai_auth import AccountUnusableError, detect_account_unusable_text
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
 logger = logging.getLogger(__name__)
@@ -475,6 +476,27 @@ def _assert_not_external_idp(driver, label: str = '') -> None:
         raise RuntimeError(f"误入第三方账号授权页（{label}）：{current}")
 
 
+def _mark_email_otp_trigger(driver, reason: str) -> float:
+    """记录真正可能触发邮箱 OTP 的时间点，供取码服务过滤旧验证码。"""
+    ts = time.time()
+    try:
+        setattr(driver, "_registration_otp_trigger_ts", ts)
+    except Exception:
+        pass
+    logger.info("%s[OTP] 已触发/尝试触发邮箱验证码：reason=%s ts=%.3f", _log_prefix(driver), reason, ts)
+    return ts
+
+
+def _last_email_otp_trigger_ts(driver, default: float | None = None) -> float:
+    try:
+        value = float(getattr(driver, "_registration_otp_trigger_ts", 0) or 0)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+    return float(default or time.time())
+
+
 def _click_email_entry_option(driver) -> bool:
     """点击“邮箱方式”入口；只看 DOM 技术属性，不看按钮可见文案，并显式排除 Google 等第三方。"""
     if _is_oauth_consent_like(driver):
@@ -768,6 +790,7 @@ def _submit_email_step(driver, email: str | None = None) -> None:
     logger.info("%s 邮箱提交前状态稳定：%s", _log_prefix(driver), stable)
     time.sleep(random.uniform(0.8, 1.8) if _browser_actions_enabled() else 0.4)
 
+    _mark_email_otp_trigger(driver, "email_submit")
     stable_submit = _submit_email_form_stable(driver, email_value)
     if stable_submit.get("ok"):
         logger.info("%s 邮箱稳定表单提交：%s", _log_prefix(driver), stable_submit)
@@ -959,8 +982,14 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
             return "logged_in"
         if _is_login_password_page(driver):
             return "login_password"
-        if _is_email_verification_page(driver):
+        try:
+            url = str(driver.current_url or '').lower()
+        except Exception:
+            url = ''
+        if _email_otp_input_present(driver):
             return "otp"
+        if 'email-verification' in url:
+            return "otp_shell"
         if _is_signup_password_page(driver):
             return "password"
         state = _email_input_value_state(driver)
@@ -1020,8 +1049,16 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
         state_name = _wait_email_submit_next_state(driver, email, timeout=20)
         if state_name == "login_password":
-            raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
-        if state_name in ("password", "otp", "logged_in"):
+            result = _click_passwordless_signup_if_present(driver)
+            if result.get("ok"):
+                logger.info("%s 邮箱提交后进入登录密码页，已点击一次性验证码入口：%s", _log_prefix(driver), result)
+                try:
+                    setattr(driver, "_registration_email_submitted", True)
+                except Exception:
+                    pass
+                return "otp_shell"
+            raise RuntimeError(f"邮箱提交后进入登录密码页，且未找到一次性验证码入口，按已注册/不可用邮箱处理: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'} state={_password_page_state(driver)}")
+        if state_name in ("password", "otp", "otp_shell", "logged_in"):
             logger.info("%s 邮箱提交后已进入下一步：%s", _log_prefix(driver), state_name)
             return state_name
         logger.warning("%s 邮箱提交后仍未进入下一步：%s，准备重填重试 state=%s", _log_prefix(driver), state_name, _email_input_value_state(driver))
@@ -1087,6 +1124,25 @@ def _email_otp_page_state(driver) -> dict:
         return {"url": getattr(driver, 'current_url', ''), "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _email_otp_input_present(driver) -> bool:
+    """确认页面上已经有可填写的邮箱验证码输入框。"""
+    state = _email_otp_page_state(driver)
+    inputs = state.get('inputs') or []
+    attrs = ' '.join(
+        ' '.join(str(i.get(k) or '') for k in ('type', 'name', 'id', 'autocomplete', 'inputmode')).lower()
+        for i in inputs
+    )
+    if 'one-time-code' in attrs or 'otp' in attrs or 'code' in attrs:
+        return True
+    numeric_like = [
+        i for i in inputs
+        if str(i.get('inputmode') or '').lower() == 'numeric'
+        or str(i.get('type') or '').lower() in {'tel', 'number'}
+    ]
+    url = str(state.get('url') or '').lower()
+    return ('email-verification' in url and len(numeric_like) >= 1) or len(numeric_like) >= 4
+
+
 def _is_email_verification_page(driver) -> bool:
     try:
         url = str(driver.current_url or '').lower()
@@ -1094,11 +1150,55 @@ def _is_email_verification_page(driver) -> bool:
         url = ''
     if '/log-in/password' in url:
         return False
-    if 'email-verification' in url:
+    if _email_otp_input_present(driver):
         return True
-    state = _email_otp_page_state(driver)
-    attrs = ' '.join(' '.join(str(i.get(k) or '') for k in ('type','name','id','autocomplete','inputmode')) for i in (state.get('inputs') or [])).lower()
-    return 'one-time-code' in attrs or 'otp' in attrs or 'code' in attrs
+    return 'email-verification' in url
+
+
+def _ensure_email_otp_ready(driver, email: str, timeout: int = 35) -> float:
+    """进入取码等待前，确认邮箱 OTP 流已经真实触发且输入框可用。
+
+    只看到 /email-verification URL 不足以证明邮件已发送；新版页面可能先渲染壳，
+    还需要点一次性验证码/发送按钮或等待 OTP 输入框出现。
+    """
+    end = time.time() + timeout
+    last = {}
+    clicked_passwordless = False
+    clicked_resend = False
+    while time.time() < end:
+        if _has_access_token(driver):
+            return _last_email_otp_trigger_ts(driver)
+        if _email_otp_input_present(driver):
+            return _last_email_otp_trigger_ts(driver)
+        if _is_signup_password_page(driver) or _is_login_password_page(driver):
+            result = _click_passwordless_signup_if_present(driver)
+            last = {"password_state": _password_page_state(driver), "passwordless": result}
+            if result.get("ok"):
+                clicked_passwordless = True
+                logger.info("%s[OTP] 已在密码页点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, result)
+                time.sleep(random.uniform(1.0, 2.0) if _browser_actions_enabled() else 1.0)
+                continue
+            if _is_login_password_page(driver):
+                raise RuntimeError(f"邮箱提交后进入登录密码页，且未找到一次性验证码入口，按已注册/不可用邮箱处理: state={last}")
+            # 注册密码页没有一次性验证码入口，交给密码页处理函数设置密码。
+            return _last_email_otp_trigger_ts(driver)
+        state = _email_otp_page_state(driver)
+        last = state
+        url = str(state.get("url") or "").lower()
+        if "email-verification" in url and not clicked_resend:
+            try:
+                result = _click_resend_email_otp(driver, timeout=4)
+                if result.get("ok"):
+                    clicked_resend = True
+                    logger.info("%s[OTP] 验证码页外壳已补点发送/重发入口：%s", _log_prefix(driver), result)
+                    continue
+            except Exception as exc:
+                logger.info("%s[OTP] 验证码页外壳暂未找到发送/重发入口，继续等待输入框：%s", _log_prefix(driver), str(exc)[:160])
+        time.sleep(0.8)
+    raise RuntimeError(
+        f"等待邮箱验证码输入框/发信入口超时：email={email}, "
+        f"clicked_passwordless={clicked_passwordless}, clicked_resend={clicked_resend}, state={last}"
+    )
 
 
 def _clear_otp_inputs(driver) -> None:
@@ -1121,7 +1221,14 @@ def _clear_otp_inputs(driver) -> None:
 
 
 def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
-    """点击重新发送邮箱验证码。优先按 DOM 属性识别，文本仅兜底。"""
+    """点击重新发送邮箱验证码。优先按 DOM 属性识别，文本仅兜底。
+
+    注意区分两个容易混淆的按钮：
+      - "メールを再送信する" / "重新发送电子邮件"（resend）→ 真正重发验证码邮件
+      - "もう一度試す" / "Try again"（retry）→ 只重置输入框，不会重发邮件
+    不能把属性里的 'again' 当成重发信号（OpenAI 验证码错误提示旁的 retry 按钮
+    常带 again），否则会出现“点了重发但永远等不到新验证码”。
+    """
     end = time.time() + timeout
     last = None
     while time.time() < end:
@@ -1129,44 +1236,101 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
             btn = driver.execute_script(r"""
             const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
             const enabled = el => !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+            const textOf = el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            const isRetry = t => /もう一度|再試行|try\s+again|retry/.test(t.toLowerCase());
             const candidates = [...document.querySelectorAll('button,a,[role=button],[role=link],input[type=button],input[type=submit]')].filter(visible);
+            // 1) 属性命中：必须真的和 resend/send 相关；'again' 单独出现是 retry 按钮，排除。
             const attrHit = candidates.find(el => {
-              if (!enabled(el)) return false;
+              if (!enabled(el) || isRetry(textOf(el))) return false;
               const attrs = [el.id, el.getAttribute('name'), el.getAttribute('value'), el.getAttribute('data-dd-action-name'), el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('data-testid')]
                 .join(' ').toLowerCase();
               const name = String(el.getAttribute('name') || '').toLowerCase();
               const value = String(el.getAttribute('value') || '').toLowerCase();
               if (name === 'intent' && value === 'resend') return true;
-              return /resend|send.*new|new.*code|again/.test(attrs);
+              return /resend|send.*new|new.*code/.test(attrs);
             });
             if (attrHit) return attrHit;
-            // 兜底：多语言文本，避免因页面没有稳定属性时卡死。
-            return candidates.find(el => enabled(el) && /resend|send\s+(?:a\s+)?new\s+code|send\s+again|重新发送|重新发送电子邮件|重发|再次发送|再送信|新しい|届かない/.test((el.innerText || el.textContent || '').toLowerCase())) || null;
+            // 2) 文本兜底：多语言，明确排除 retry 按钮，避免点错。
+            return candidates.find(el => {
+              if (!enabled(el)) return false;
+              const t = textOf(el).toLowerCase();
+              if (isRetry(t)) return false;
+              return /resend|send\s+(?:a\s+)?new\s+code|send\s+again|重新发送|重新发送电子邮件|重发|再次发送|再送信|メールを再送信|新しい|届かない/.test(t);
+            }) || null;
             """)
             if btn:
                 text = str(btn.text or btn.get_attribute('value') or btn.get_attribute('data-dd-action-name') or '').strip()
+                _mark_email_otp_trigger(driver, "resend_email_otp")
                 _human_click(driver, btn, label="resend_otp")
                 logger.info("%s[OTP] 已点击重新发送验证码按钮：%s", _log_prefix(driver), text or '-')
                 time.sleep(random.uniform(1.1, 2.4) if _browser_actions_enabled() else 1.5)
+                # 点击后确认仍在验证码流程内：连续验证码错误可能已使 OTP 会话失效，
+                # 被服务端踢回登录页，此时继续等只会白白耗完剩余轮次。
+                try:
+                    cur = str(driver.current_url or '').lower()
+                except Exception:
+                    cur = ''
+                if any(m in cur for m in ("/log-in", "/sign-in", "/auth/login")):
+                    raise RuntimeError(
+                        f"点击重新发送后 OTP 会话已失效，页面跳回登录页: {cur}。"
+                        f"验证码连续错误或 auth 会话过期，应重新提交邮箱开始新会话。"
+                    )
                 return {"ok": True, "text": text}
+        except RuntimeError:
+            raise
         except Exception as exc:
             last = exc
         time.sleep(0.5)
     raise RuntimeError(f"找不到可点击的重新发送验证码按钮: last={last}, state={_email_otp_page_state(driver)}")
 
 
-def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
-    """提交 OTP 后等待页面离开验证码页；仍在验证码页且有错误/输入框则认为验证码无效。"""
+_OTP_ERROR_HINTS = (
+    "incorrect", "invalid", "wrong", "expired", "error",
+    "正しくありません", "有効期限", "無効", "エラー",
+    "错误", "錯誤", "验证码", "驗證碼",
+)
+
+
+def _wait_after_email_otp_submit(driver, timeout: int = 15) -> str:
+    """提交 OTP 后等待页面离开验证码页；仍在验证码页且有错误/输入框则认为验证码无效。
+
+    错误信号需要连续出现约 1.5s 才判定 invalid：提交瞬间页面可能短暂闪现
+    上一轮残留的错误状态（aria-invalid/error 元素），代理网络慢时 2 秒内的
+    “错误”往往不是真实的服务端校验结果，过早判定会白白烧掉重试轮次。
+    """
     end = time.time() + timeout
     last = {}
+    error_seen_at = 0.0
     while time.time() < end:
         time.sleep(0.5)
         if not _is_email_verification_page(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
-        invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
-        if invalid or (last.get('errors') or []):
-            return 'invalid'
+        # 账号已废（account_deactivated/deleted/banned）：验证码即使正确也无法通过，
+        # 重发/重试无意义，返回 'deactivated' 让上层直接抛 AccountUnusableError 剔除邮箱。
+        dead_text = " ".join([
+            *(str(e or "") for e in (last.get("errors") or [])),
+            str(last.get("text") or ""),
+        ])
+        dead_code = detect_account_unusable_text(dead_text)
+        if dead_code:
+            logger.warning(
+                "%s[OTP] 检测到账号已废（%s），不再重发验证码 snapshot=%s",
+                _log_prefix(driver), dead_code, last,
+            )
+            return 'deactivated'
+        aria_invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
+        error_texts = [str(e or '') for e in (last.get('errors') or [])]
+        text_invalid = bool(error_texts) and any(
+            any(h in t.lower() for h in _OTP_ERROR_HINTS) for t in error_texts
+        )
+        if aria_invalid or text_invalid:
+            if not error_seen_at:
+                error_seen_at = time.time()
+            elif time.time() - error_seen_at >= 1.5:
+                return 'invalid'
+        else:
+            error_seen_at = 0.0
     if _is_email_verification_page(driver):
         logger.warning("%s[OTP] 提交后仍停留验证码页，按验证码无效/过期处理 snapshot=%s", _log_prefix(driver), _email_otp_page_state(driver))
         return 'invalid'
@@ -1615,6 +1779,7 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         };
         """) or {"ok": False, "reason": "empty_result"}
         if result.get("ok") and result.get("button"):
+            _mark_email_otp_trigger(driver, "passwordless_send_otp")
             _human_click(driver, result.get("button"), label="passwordless_otp")
             result["reason"] = "clicked_passwordless_send_otp"
             result.pop("button", None)
@@ -1967,10 +2132,22 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
     client = RoxyBrowserClient()
     opened = client.open_profile()
     driver = None
+    recorder = None
     create_acknowledged = False
     openai_password: str | None = None
     try:
         driver = _build_driver(opened)
+        # 可选：通过 CDP 采集整个注册流程的 HAR + JS 指纹（ROXY_CAPTURE_HAR=True）。
+        # 采集是纯附加、可降级的，任何失败都不影响注册主流程。
+        try:
+            from core.cdp_har_recorder import start_har_recorder
+            recorder = start_har_recorder(opened, email)
+            if recorder is not None:
+                recorder.capture_js_fingerprint(driver)
+        except Exception as exc:
+            logger.warning("[Roxy注册] HAR 采集启动失败，本次不采集：%s", exc)
+        from core.registration_geo import detect_selenium_registration_country
+        registration_country = detect_selenium_registration_country(driver)
         _center_browser_window(driver)
         driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
         try:
@@ -2003,6 +2180,8 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         # 先设置密码并提交，然后再等待邮箱验证码页。
         openai_password = None if next_state == "otp" else _fill_password_page_if_present(driver, email, timeout=25)
         _check_manual_stop()
+        otp_after_ts = _ensure_email_otp_ready(driver, email, timeout=35)
+        logger.info("[Roxy注册][OTP] 邮箱验证码流程已就绪，取码起点=%.3f", otp_after_ts)
 
         current_otp = otp_code
         max_otp_attempts = 3
@@ -2010,7 +2189,13 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             if current_otp is None:
                 logger.info("[Roxy注册][OTP] 等待验证码：%s（第 %s/%s 次）", email, otp_attempt, max_otp_attempts)
                 try:
-                    current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                    # 第一封验证码邮件经常丢失/延迟（取码服务偶发收不到），
+                    # 首轮缩短等待窗口，没码先主动点一次重发，避免干等 90s。
+                    current_otp = wait_for_otp(
+                        email,
+                        after_ts=otp_after_ts,
+                        max_wait=45 if otp_attempt == 1 else None,
+                    )
                 except Exception as exc:
                     if otp_attempt >= max_otp_attempts:
                         raise
@@ -2021,8 +2206,8 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                         type(exc).__name__,
                         str(exc)[:180],
                     )
-                    otp_after_ts = time.time()
                     _click_resend_email_otp(driver, timeout=25)
+                    otp_after_ts = _last_email_otp_trigger_ts(driver, otp_after_ts)
                     human_delay("api")
                     current_otp = None
                     continue
@@ -2038,14 +2223,18 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             except Exception as exc:
                 logger.info("[Roxy注册][OTP] 未找到显式提交按钮，继续等待页面状态：%s", str(exc)[:120])
 
-            outcome = _wait_after_email_otp_submit(driver, timeout=10)
+            outcome = _wait_after_email_otp_submit(driver)
+            if outcome == 'deactivated':
+                raise AccountUnusableError(
+                    f"账号已被停用，邮箱对应的 OpenAI 账号已删除/停用，无法完成注册: {email}"
+                )
             if outcome == 'accepted':
                 break
             if otp_attempt >= max_otp_attempts:
                 raise RuntimeError("邮箱验证码连续错误/过期，已达到最大重试次数")
             logger.warning("[Roxy注册][OTP] 验证码错误/过期，准备重新发送并重新获取验证码（%s/%s）", otp_attempt + 1, max_otp_attempts)
-            otp_after_ts = time.time()
             _click_resend_email_otp(driver, timeout=25)
+            otp_after_ts = _last_email_otp_trigger_ts(driver, otp_after_ts)
             human_delay("api")
             current_otp = None
 
@@ -2064,6 +2253,27 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         access_token = session_info["accessToken"]
         logger.info("[Roxy注册] 已拿到 accessToken：%s", email)
         _check_manual_stop()
+
+        plan_result = None
+        try:
+            from core.chatgpt_plan import check_account_plan_browser
+            plan_result = check_account_plan_browser(driver, access_token)
+            logger.info(
+                "[Roxy注册][Plan] 浏览器上下文查询完成: ok=%s status=%s",
+                plan_result.get("ok"),
+                plan_result.get("http_status"),
+            )
+        except Exception as exc:
+            plan_result = {
+                "ok": False,
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "error": f"浏览器套餐查询异常: {type(exc).__name__}: {str(exc)[:180]}",
+                "retryable": True,
+                "needs_live_check": False,
+                "browser_context": True,
+                "network_route": "browser",
+                "proxy_mode": "browser",
+            }
 
         if _twofa_cfg.ENABLE_2FA:
             logger.warning("[Roxy注册] 当前 Roxy 自动化路径暂不执行 2FA 设置，已跳过")
@@ -2101,6 +2311,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
             proxy_used=proxy or None,
+            registration_country=registration_country,
             batch_dir=batch_dir,
             extra={
                 "user": session_info.get("user"),
@@ -2110,6 +2321,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 "registration_password": openai_password,
                 "codex": codex_result,
             },
+            plan_result=plan_result,
         )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         return {
@@ -2124,14 +2336,24 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
     except Exception as exc:
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Roxy注册] 失败详情", exc_info=True)
-        # 未确认创建前回收邮箱；确认后避免重复使用。
+        # 未确认创建前回收邮箱；确认后避免重复使用。账号已废（被 OpenAI 删除/停用）
+        # 的邮箱即使重试也会同样失败，直接标 failed 剔除，不再放回 available。
         try:
             from core.email_provider import release_email
-            release_email(email, status="failed" if create_acknowledged else "available", note=f"Roxy注册失败: {str(exc)[:180]}")
+            account_dead = isinstance(exc, AccountUnusableError)
+            status = "failed" if (create_acknowledged or account_dead) else "available"
+            note = "账号已被删除/停用，邮箱不可用" if account_dead else f"Roxy注册失败: {str(exc)[:180]}"
+            release_email(email, status=status, note=note)
         except Exception:
             pass
         return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     finally:
+        # 先结束 HAR 采集（导出 HAR + 指纹），再关浏览器，确保拿到完整流程数据。
+        if recorder is not None:
+            try:
+                recorder.stop(driver=driver)
+            except Exception as exc:
+                logger.warning("[Roxy注册] HAR 采集结束失败（不影响注册结果）：%s", exc)
         if driver and not bool(_cfg.ROXY_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()

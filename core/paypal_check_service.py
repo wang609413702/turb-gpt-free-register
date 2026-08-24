@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""MoMo 支付支持检测后台队列。
+"""PayPal 支付支持检测后台队列。
 
-完全镜像 core/plan_check_service.py：模块级线程池 + 信号量限流 + 原子占用，
-单账号入队执行 check_account_momo 并把结果写回 db。
+镜像 core/momo_check_service.py，使用独立 PayPal 代理池（建议 US 出口）。
 """
 from __future__ import annotations
 
@@ -14,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from config import proxy as proxy_cfg
-from config.proxy import pick_momo_proxy
+from config.proxy import pick_paypal_proxy
 from core import db
-from core.chatgpt_momo import check_account_momo
+from core.chatgpt_momo import check_account_paypal
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,9 @@ def _float_setting(name: str, default: float, lower: float, upper: float) -> flo
     return max(lower, min(upper, value))
 
 
-_WORKERS = _int_setting("MOMO_CHECK_WORKERS", 3, 1, 16)
-_QUEUE_LIMIT = _int_setting("MOMO_CHECK_QUEUE_LIMIT", 500, _WORKERS, 5000)
-_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="momo-check")
+_WORKERS = _int_setting("PAYPAL_CHECK_WORKERS", 3, 1, 16)
+_QUEUE_LIMIT = _int_setting("PAYPAL_CHECK_QUEUE_LIMIT", 500, _WORKERS, 5000)
+_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="paypal-check")
 _QUEUE_SLOTS = threading.BoundedSemaphore(_QUEUE_LIMIT)
 _RATE_LOCK = threading.Lock()
 _NEXT_REQUEST_AT = 0.0
@@ -48,8 +47,8 @@ _NEXT_REQUEST_AT = 0.0
 def _wait_for_rate_slot() -> None:
     """为所有检测线程分配错开的请求启动时间。"""
     global _NEXT_REQUEST_AT
-    min_interval = _float_setting("MOMO_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0)
-    jitter = _float_setting("MOMO_CHECK_JITTER", 0.3, 0.0, 30.0)
+    min_interval = _float_setting("PAYPAL_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0)
+    jitter = _float_setting("PAYPAL_CHECK_JITTER", 0.3, 0.0, 30.0)
     with _RATE_LOCK:
         now = time.monotonic()
         scheduled = max(now, _NEXT_REQUEST_AT) + (random.uniform(0.0, jitter) if jitter else 0.0)
@@ -59,32 +58,38 @@ def _wait_for_rate_slot() -> None:
         time.sleep(wait_seconds)
 
 
-def _run_account_momo_check(
+def _normalize_region(region: str | None) -> str:
+    """归一化 PayPal 检测地区：只接受 br/th/de，其余回退 br。"""
+    value = str(region or "br").strip().lower()
+    return value if value in ("br", "th", "de") else "br"
+
+
+def _run_account_paypal_check(
     *,
     account_id: int,
     email: str,
     access_token: str,
     trigger: str,
     proxy: str | None,
+    region: str = "br",
 ) -> dict:
     try:
-        if not db.mark_account_momo_check_running(account_id):
-            return {"ok": False, "error": "账号已删除或 MoMo 检测状态已被重置"}
+        if not db.mark_account_paypal_check_running(account_id):
+            return {"ok": False, "error": "账号已删除或 PayPal 检测状态已被重置"}
 
-        # 前端未显式覆盖时，MoMo 检测单独使用专用代理池轮换；池为空则直连。
-        # 传非 None 的 proxy 让 resolve_plan_check_route 走显式覆盖分支，
-        # 绕开 PLAN_CHECK 网络配置，只用 MoMo 池。
+        # 前端未显式覆盖时，PayPal 检测单独使用该地区的专用代理池轮换；池为空则直连。
         if proxy is None:
-            proxy = pick_momo_proxy()
+            proxy = pick_paypal_proxy(region)
 
         _wait_for_rate_slot()
-        result = check_account_momo(access_token, proxy=proxy)
+        result = check_account_paypal(access_token, proxy=proxy, region=region)
 
-        db.update_account_momo_check(acc_id=account_id, result=result)
+        db.update_account_paypal_check(acc_id=account_id, result=result)
         if result.get("ok"):
             has_target = result.get("has_target")
             logger.info(
-                "[MoMo] 后台检测成功: %s, decision=%s, has_momo=%s, trigger=%s",
+                "[PayPal-%s] 后台检测成功: %s, decision=%s, has_paypal=%s, trigger=%s",
+                region.upper(),
                 email,
                 result.get("decision"),
                 has_target,
@@ -92,7 +97,8 @@ def _run_account_momo_check(
             )
         else:
             logger.warning(
-                "[MoMo] 后台检测失败: %s, trigger=%s, error=%s",
+                "[PayPal-%s] 后台检测失败: %s, trigger=%s, error=%s",
+                region.upper(),
                 email,
                 trigger,
                 result.get("error") or "未知错误",
@@ -104,56 +110,60 @@ def _run_account_momo_check(
             "checked_at": datetime.now().isoformat(timespec="seconds"),
             "error": f"{type(exc).__name__}: {str(exc)[:180]}",
             "decision": "checkout_failed",
+            "region": region,
         }
         try:
-            db.update_account_momo_check(acc_id=account_id, result=result)
+            db.update_account_paypal_check(acc_id=account_id, result=result)
         except Exception:
-            logger.exception("[MoMo] 写入后台检测异常状态失败: account_id=%s", account_id)
-        logger.exception("[MoMo] 后台检测异常: %s", email)
+            logger.exception("[PayPal] 写入后台检测异常状态失败: account_id=%s", account_id)
+        logger.exception("[PayPal] 后台检测异常: %s", email)
         return result
     finally:
         _QUEUE_SLOTS.release()
 
 
-def enqueue_account_momo_check(
+def enqueue_account_paypal_check(
     *,
     account_id: int,
     email: str,
     access_token: str,
     trigger: str,
     proxy: str | None = None,
+    region: str = "br",
 ) -> dict:
-    """把检测放入统一线程池；重复检测或队列满时不提交。"""
+    """把检测放入统一线程池；重复检测或队列满时不提交。region: br/th/de。"""
     account_id = int(account_id)
     email = str(email or "").strip()
     access_token = str(access_token or "").strip()
+    region = _normalize_region(region)
     if not access_token:
         return {"accepted": False, "busy": False, "error": "账号缺少 access_token"}
     if not _QUEUE_SLOTS.acquire(blocking=False):
-        return {"accepted": False, "busy": False, "queue_full": True, "error": "MoMo 检测队列已满，请稍后重试"}
+        return {"accepted": False, "busy": False, "queue_full": True, "error": "PayPal 检测队列已满，请稍后重试"}
 
-    if not db.claim_account_momo_check(acc_id=account_id, trigger=trigger):
+    if not db.claim_account_paypal_check(acc_id=account_id, trigger=trigger, region=region):
         _QUEUE_SLOTS.release()
-        return {"accepted": False, "busy": True, "error": "该账号正在检测 MoMo"}
+        return {"accepted": False, "busy": True, "error": "该账号正在检测 PayPal"}
 
     try:
         _EXECUTOR.submit(
-            _run_account_momo_check,
+            _run_account_paypal_check,
             account_id=account_id,
             email=email,
             access_token=access_token,
             trigger=str(trigger or "manual"),
             proxy=proxy,
+            region=region,
         )
     except Exception as exc:
         _QUEUE_SLOTS.release()
         result = {
             "ok": False,
             "checked_at": datetime.now().isoformat(timespec="seconds"),
-            "error": f"MoMo 检测入队失败: {type(exc).__name__}: {str(exc)[:160]}",
+            "error": f"PayPal 检测入队失败: {type(exc).__name__}: {str(exc)[:160]}",
             "decision": "checkout_failed",
         }
-        db.update_account_momo_check(acc_id=account_id, result=result)
+        db.update_account_paypal_check(acc_id=account_id, result=result)
         return {"accepted": False, "busy": False, "error": result["error"]}
 
     return {
@@ -170,6 +180,6 @@ def queue_settings() -> dict:
     return {
         "workers": _WORKERS,
         "queue_limit": _QUEUE_LIMIT,
-        "min_interval": _float_setting("MOMO_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0),
-        "jitter": _float_setting("MOMO_CHECK_JITTER", 0.3, 0.0, 30.0),
+        "min_interval": _float_setting("PAYPAL_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0),
+        "jitter": _float_setting("PAYPAL_CHECK_JITTER", 0.3, 0.0, 30.0),
     }

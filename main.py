@@ -266,6 +266,14 @@ def run_registration(
             )
             human_delay("navigate")
 
+        # 可选：资源预热，把请求画像从 ~18 条拉到接近真实浏览器（实验性，默认关闭）。
+        # 失败一律吞掉，不影响注册主流程。
+        if bool(getattr(_protocol_cfg, "PROTOCOL_ASSET_WARMUP", False)):
+            from core.asset_warmup import warmup_page_assets
+            _warmup_max = int(getattr(_protocol_cfg, "PROTOCOL_ASSET_WARMUP_MAX_PER_PAGE", 60) or 60)
+            warmup_page_assets(session, "https://chatgpt.com/login", max_assets=_warmup_max)
+            human_delay("navigate")
+
         # ==================== 阶段1: ChatGPT 认证 ====================
         # 步骤1: 获取 providers
         providers = get_providers(session)
@@ -291,6 +299,18 @@ def run_registration(
         follow_authorize(session, authorize_url)
         human_delay("navigate")
 
+        # 资源预热：auth.openai.com 落地页（通常是 /email-verification）
+        if bool(getattr(_protocol_cfg, "PROTOCOL_ASSET_WARMUP", False)):
+            from core.asset_warmup import warmup_page_assets
+            _warmup_max = int(getattr(_protocol_cfg, "PROTOCOL_ASSET_WARMUP_MAX_PER_PAGE", 60) or 60)
+            warmup_page_assets(
+                session,
+                "https://auth.openai.com/email-verification",
+                referer="https://chatgpt.com/",
+                max_assets=_warmup_max,
+            )
+            human_delay("navigate")
+
         # ==================== 阶段3: 验证码验证 ====================
         # Sentinel Token 不提前生成；等 OTP 到手后紧贴 validate 请求生成，
         # 避免等待邮箱期间 challenge 过期或与重新发送后的状态不一致。
@@ -312,8 +332,9 @@ def run_registration(
 
             human_delay("otp_input")
             try:
-                # HAR 对齐：2026-07-19 抓包中的 email-otp/validate 未携带 Sentinel。
-                # 保留开关，必要时可切回旧逻辑。
+                # 2026-08-14 真实浏览器 HAR 采集确认：email-otp/validate 携带
+                # openai-sentinel-token + openai-sentinel-so-token（flow=authorize_continue）。
+                # 默认 SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE=True 对齐；如需回退可关。
                 sentinel_header_9 = None
                 so_header_9 = None
                 if getattr(_protocol_cfg, "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", False):
@@ -480,12 +501,14 @@ def run_registration(
 
         # ==================== 阶段8: 持久化账号 ====================
         from core.email_provider import resolve_email_source
+        from core.registration_geo import normalize_registration_country
         account_id = save_account_data(
             email=email,
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
             proxy_used=session.proxy or None,
+            registration_country=normalize_registration_country(session.exit_geo),
             batch_dir=batch_dir,
             extra={
                 "user": session_info.get("user"),
@@ -555,9 +578,9 @@ def run_registration(
                 if account_dead:
                     src = release_email(
                         email, status="failed",
-                        note=f"账号已废弃，邮箱不可用: {str(e)[:180]}",
+                        note="账号已被删除/停用，邮箱不可用",
                     )
-                    logger.warning(f"[邮箱:{src}] {email} 账号已废弃，标记为 failed，不再重新注册")
+                    logger.warning(f"[邮箱:{src}] {email} 账号已被删除/停用，标记为 failed，不再重新注册")
                 elif create_acknowledged:
                     src = release_email(
                         email, status="failed",

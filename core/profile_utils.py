@@ -15,11 +15,11 @@ def _shift_year_safe(day: date, years: int) -> date:
         return day.replace(year=day.year + years, month=2, day=28)
 
 
-def generate_random_birthday(min_age: int = 18, max_age: int = 65) -> str:
+def generate_random_birthday(min_age: int = 22, max_age: int = 35) -> str:
     """
     生成年龄在 [min_age, max_age] 闭区间内的随机生日，格式 YYYY-MM-DD。
 
-    例如默认会在“今天满 65 岁”到“今天满 18 岁”之间随机取一天。
+    例如默认会在“今天满 35 岁”到“今天满 22 岁”之间随机取一天。
     """
     if min_age < 0 or max_age < min_age:
         raise ValueError(f"年龄范围无效: min_age={min_age}, max_age={max_age}")

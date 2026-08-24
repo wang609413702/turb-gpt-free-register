@@ -15,7 +15,7 @@ import random
 import threading
 import string
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1851,6 +1851,26 @@ def run_browser_use_registration(
             create_acknowledged = True
             logger.info("[BrowserUse] 已拿到 accessToken：%s", email)
 
+            try:
+                from core.chatgpt_plan import check_account_plan_browser
+                plan_result = check_account_plan_browser(page, access_token)
+                logger.info(
+                    "[BrowserUse][Plan] 浏览器上下文查询完成: ok=%s status=%s",
+                    plan_result.get("ok"),
+                    plan_result.get("http_status"),
+                )
+            except Exception as exc:
+                plan_result = {
+                    "ok": False,
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": f"浏览器套餐查询异常: {type(exc).__name__}: {str(exc)[:180]}",
+                    "retryable": True,
+                    "needs_live_check": False,
+                    "browser_context": True,
+                    "network_route": "browser",
+                    "proxy_mode": "browser",
+                }
+
             if _twofa_cfg.ENABLE_2FA:
                 logger.warning("[BrowserUse] 当前路径暂不自动设置 2FA，已跳过")
             totp_secret = None
@@ -1899,6 +1919,7 @@ def run_browser_use_registration(
                 totp_secret=totp_secret,
                 email_source=resolve_email_source(email),
                 proxy_used=proxy or f"{provider_prefix}:{session_info_open.proxy_country_code or 'default'}",
+                registration_country=session_info_open.proxy_country_code,
                 batch_dir=batch_dir,
                 extra={
                     "user": session_info.get("user"),
@@ -1913,6 +1934,7 @@ def run_browser_use_registration(
                     "registration_password": openai_password,
                     "codex": codex_result,
                 },
+                plan_result=plan_result,
             )
             _t_all.done("success")
             return {

@@ -18,7 +18,17 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, momo_check_service, extract_link_service, codex_agent_service
+from core import codex_retry_service, db, plan_check_service, trial_check_service, momo_check_service, gcash_check_service, kakao_check_service, paypal_check_service, ideal_check_service, gopay_check_service, extract_link_service, codex_agent_service
+from core import momo_link_db, momo_link_service
+from core import gcash_link_db, gcash_link_service
+from core import gopay_link_db, gopay_link_service
+from config.trial import (
+    TRIAL_REGION_DETAIL_SUFFIXES,
+    TRIAL_REGION_FIELD_PREFIXES,
+    TRIAL_REGIONS,
+    account_has_trial_eligibility,
+    trial_timezone_offset_min,
+)
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -90,16 +100,19 @@ def _compact_account_for_list(row: dict) -> dict:
 
     # 这些是列表固定列直接展示字段。
     for key in (
-        "user_name", "email_source", "note", "archived", "created_at",
+        "user_name", "email_source", "registration_country", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
-        "plan_check_status", "codex_status", "codex_agent_status",
-        "momo_check_status",
+        *(f"{TRIAL_REGION_FIELD_PREFIXES[region]}_eligible" for region in TRIAL_REGIONS),
+        "plan_check_status", "trial_check_status", "codex_status", "codex_agent_status",
+        "momo_check_status", "gcash_check_status", "kakao_check_status", "paypal_check_status", "ideal_check_status", "gopay_check_status",
     ):
         if key in row:
             out[key] = row.get(key)
 
     if row.get("plan_check_status") in ("queued", "running") or row.get("plan_check_ok") is False:
         out["plan_check_ok"] = row.get("plan_check_ok")
+    if row.get("trial_check_status") in ("queued", "running") or row.get("trial_check_ok") is False:
+        out["trial_check_ok"] = row.get("trial_check_ok")
 
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
@@ -107,6 +120,14 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_check_error", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
+        # 试用资格展示补充：查询时间/活动信息/失败原因。
+        "trial_check_error", "trial_check_region", "trial_check_trigger",
+        *tuple(
+            f"{TRIAL_REGION_FIELD_PREFIXES[region]}_{suffix}"
+            for region in TRIAL_REGIONS
+            for suffix in TRIAL_REGION_DETAIL_SUFFIXES
+            if suffix != "eligible"
+        ),
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
@@ -117,6 +138,27 @@ def _compact_account_for_list(row: dict) -> dict:
         # MoMo 检测结果（检测成功/失败时才需要）。
         "momo_has_momo", "momo_decision", "momo_decision_text", "momo_supported",
         "momo_methods", "momo_check_error", "momo_checked_at",
+        "momo_exit_ip", "momo_exit_country", "momo_session_kind",
+        # GCash 检测结果（检测成功/失败时才需要）。
+        "gcash_has_gcash", "gcash_decision", "gcash_decision_text", "gcash_supported",
+        "gcash_methods", "gcash_check_error", "gcash_checked_at",
+        "gcash_exit_ip", "gcash_exit_country", "gcash_session_kind",
+        # Kakao 检测结果（检测成功/失败时才需要）。
+        "kakao_has_kakao", "kakao_decision", "kakao_decision_text", "kakao_supported",
+        "kakao_methods", "kakao_check_error", "kakao_checked_at",
+        "kakao_exit_ip", "kakao_exit_country", "kakao_session_kind",
+        # PayPal 检测结果（检测成功/失败时才需要）。
+        "paypal_has_paypal", "paypal_decision", "paypal_decision_text", "paypal_supported",
+        "paypal_methods", "paypal_check_error", "paypal_checked_at",
+        "paypal_exit_ip", "paypal_exit_country", "paypal_session_kind", "paypal_check_region",
+        # IDEAL 检测结果（检测成功/失败时才需要）。
+        "ideal_has_ideal", "ideal_decision", "ideal_decision_text", "ideal_supported",
+        "ideal_methods", "ideal_check_error", "ideal_checked_at",
+        "ideal_exit_ip", "ideal_exit_country", "ideal_session_kind",
+        # GoPay 检测结果（检测成功/失败时才需要）。
+        "gopay_has_gopay", "gopay_decision", "gopay_decision_text", "gopay_supported",
+        "gopay_methods", "gopay_check_error", "gopay_checked_at",
+        "gopay_exit_ip", "gopay_exit_country", "gopay_session_kind",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -138,7 +180,25 @@ def _account_secret_value(row: dict, field: str) -> str:
         return str(row.get("copy_line") or "")
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
-    raise ValueError("field 仅支持 access_token/copy_line/codex_agent_token")
+    if field == "original_email_line":
+        # 与邮箱池「复制邮箱」同格式：导出原始邮箱素材行
+        # （outlook: email----password----clientId----refreshToken；generic_api: email----code_url）。
+        # 注册流程只给 outlook 账号落素材行；generic_api 账号的素材只在邮箱池里，
+        # 导出时按邮箱回查两个池重建，仍找不到才退回纯邮箱地址。
+        line = str(row.get("original_email_line") or "").strip()
+        if line:
+            return line
+        email = str(row.get("email") or "").strip()
+        if not email:
+            return ""
+        try:
+            pool_row = db.get_outlook_by_email(email) or db.get_generic_api_email_by_email(email)
+        except Exception:
+            pool_row = None
+        if pool_row and str(pool_row.get("copy_line") or "").strip():
+            return str(pool_row["copy_line"]).strip()
+        return email
+    raise ValueError("field 仅支持 access_token/copy_line/codex_agent_token/original_email_line")
 
 
 def _compact_job_for_list(row: dict) -> dict:
@@ -215,9 +275,27 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_plan_checks = db.recover_interrupted_plan_checks()
     if recovered_plan_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
+    recovered_trial_checks = db.recover_interrupted_trial_checks()
+    if recovered_trial_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的试用资格查询状态", recovered_trial_checks)
     recovered_momo_checks = db.recover_interrupted_momo_checks()
     if recovered_momo_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 MoMo 检测状态", recovered_momo_checks)
+    recovered_gcash_checks = db.recover_interrupted_gcash_checks()
+    if recovered_gcash_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 GCash 检测状态", recovered_gcash_checks)
+    recovered_kakao_checks = db.recover_interrupted_kakao_checks()
+    if recovered_kakao_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 Kakao 检测状态", recovered_kakao_checks)
+    recovered_paypal_checks = db.recover_interrupted_paypal_checks()
+    if recovered_paypal_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 PayPal 检测状态", recovered_paypal_checks)
+    recovered_ideal_checks = db.recover_interrupted_ideal_checks()
+    if recovered_ideal_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 IDEAL 检测状态", recovered_ideal_checks)
+    recovered_gopay_checks = db.recover_interrupted_gopay_checks()
+    if recovered_gopay_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 GoPay 检测状态", recovered_gopay_checks)
     recovered_extract_links = db.recover_interrupted_extract_links()
     if recovered_extract_links:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
@@ -230,17 +308,20 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/")
     def index():
+        _ui_modes = {"legacy", "modern", "neo"}
         requested_ui = (request.args.get("ui") or "").strip().lower()
-        if requested_ui in {"legacy", "modern"}:
+        if requested_ui in _ui_modes:
             ui_mode = requested_ui
         else:
             ui_mode = (request.cookies.get("ui_mode") or "modern").strip().lower()
-            if ui_mode not in {"legacy", "modern"}:
+            if ui_mode not in _ui_modes:
                 ui_mode = "modern"
 
         template_name = "index_legacy.html" if ui_mode == "legacy" else "index.html"
-        resp = make_response(render_template(template_name))
-        if requested_ui in {"legacy", "modern"}:
+        # neo 主题通过 <html data-theme="neo"> 注入深色 CSS；其余风格留空，行为不变。
+        theme_attr = 'data-theme="neo"' if ui_mode == "neo" else ""
+        resp = make_response(render_template(template_name, theme_attr=theme_attr))
+        if requested_ui in _ui_modes:
             resp.set_cookie("ui_mode", ui_mode, max_age=60 * 60 * 24 * 365, samesite="Lax")
         return resp
 
@@ -317,7 +398,13 @@ def create_app(auth_code: str | None = None) -> Flask:
         else:
             snapshot = db.list_account_plan_check_statuses(limit=max(1, min(5000, limit)), archived=archived, plan_filter=plan_filter, q=q)
         snapshot["queue"] = plan_check_service.queue_settings()
+        snapshot["trial_queue"] = trial_check_service.queue_settings()
         snapshot["momo_queue"] = momo_check_service.queue_settings()
+        snapshot["gcash_queue"] = gcash_check_service.queue_settings()
+        snapshot["kakao_queue"] = kakao_check_service.queue_settings()
+        snapshot["paypal_queue"] = paypal_check_service.queue_settings()
+        snapshot["ideal_queue"] = ideal_check_service.queue_settings()
+        snapshot["gopay_queue"] = gopay_check_service.queue_settings()
         return jsonify(snapshot)
 
 
@@ -521,9 +608,11 @@ def create_app(auth_code: str | None = None) -> Flask:
             access_token=token,
             trigger="manual",
             proxy=data.get("proxy") if "proxy" in data else None,
-            timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
+            timezone_offset_min=str(data.get("timezone_offset_min") or "-480"),
         )
         if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if queued.get("needs_live_check"):
             return jsonify({"ok": False, **queued}), 409
         if not queued.get("accepted"):
             return jsonify({"ok": False, **queued}), 503
@@ -540,7 +629,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
         # 与单账号查询保持一致：未传时使用独立网络策略。
         proxy = data.get("proxy") if "proxy" in data else None
-        timezone_offset_min = str(data.get("timezone_offset_min") or "-")
+        timezone_offset_min = str(data.get("timezone_offset_min") or "-480")
 
         items = []
         skipped = []
@@ -571,6 +660,121 @@ def create_app(auth_code: str | None = None) -> Flask:
                 account_id=int(acc.get("id")),
                 email=acc.get("email") or "",
                 access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+                timezone_offset_min=timezone_offset_min,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    @app.post("/api/accounts/check-trial")
+    def api_account_check_trial():
+        """把单账号地区试用资格查询加入后台队列。Body {account_id|email, region: jp|gb|de|br|th|ph, proxy?, timezone_offset_min?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        region = str(data.get("region") or "").strip().lower()
+        if region not in TRIAL_REGIONS:
+            return jsonify({"ok": False, "error": f"试用资格地区 {region!r} 无效，可选 {'/'.join(TRIAL_REGIONS)}"}), 400
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        queued = trial_check_service.enqueue_account_trial_check(
+            account_id=int(acc.get("id")),
+            email=acc.get("email") or "",
+            access_token=token,
+            region=region,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+            timezone_offset_min=str(
+                data.get("timezone_offset_min")
+                if data.get("timezone_offset_min") not in (None, "")
+                else trial_timezone_offset_min(region)
+            ),
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if queued.get("needs_live_check"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/check-trial-bulk")
+    def api_accounts_check_trial_bulk():
+        """批量把地区试用资格查询加入统一后台队列。Body {account_ids:[...], region: jp|gb|de|br|th|ph, proxy?, timezone_offset_min?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        region = str(data.get("region") or "").strip().lower()
+        if region not in TRIAL_REGIONS:
+            return jsonify({"ok": False, "error": f"试用资格地区 {region!r} 无效，可选 {'/'.join(TRIAL_REGIONS)}"}), 400
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+        timezone_offset_min = str(
+            data.get("timezone_offset_min")
+            if data.get("timezone_offset_min") not in (None, "")
+            else trial_timezone_offset_min(region)
+        )
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = trial_check_service.enqueue_account_trial_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                region=region,
                 trigger="manual_bulk",
                 proxy=proxy,
                 timezone_offset_min=timezone_offset_min,
@@ -690,6 +894,906 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped_count": len(skipped),
         }), 202
 
+    @app.post("/api/accounts/gcash-check")
+    def api_account_gcash_check():
+        """把单账号 GCash 检测加入后台队列。Body {account_id|email, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = gcash_check_service.enqueue_account_gcash_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/gcash-check-bulk")
+    def api_accounts_gcash_check_bulk():
+        """批量把 GCash 检测加入统一后台队列。Body {account_ids:[...], proxy?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        # 与单账号检测保持一致：未传时使用 GCash 专用代理池。
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = gcash_check_service.enqueue_account_gcash_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== Kakao 检测 ==================== #
+    @app.post("/api/accounts/kakao-check")
+    def api_account_kakao_check():
+        """把单账号 Kakao 检测加入后台队列。Body {account_id|email, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = kakao_check_service.enqueue_account_kakao_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/kakao-check-bulk")
+    def api_accounts_kakao_check_bulk():
+        """批量把 Kakao 检测加入统一后台队列。Body {account_ids:[...], proxy?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = kakao_check_service.enqueue_account_kakao_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== PayPal 检测 ==================== #
+    @app.post("/api/accounts/paypal-check")
+    def api_account_paypal_check():
+        """把单账号 PayPal 检测加入后台队列。Body {account_id|email, region?: br|th|de, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        region = str(data.get("region") or "br").strip().lower()
+        if region not in ("br", "th", "de"):
+            return jsonify({"ok": False, "error": "region 仅支持 br/th/de"}), 400
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = paypal_check_service.enqueue_account_paypal_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+            region=region,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/paypal-check-bulk")
+    def api_accounts_paypal_check_bulk():
+        """批量把 PayPal 检测加入统一后台队列。Body {account_ids:[...], region?: br|th|de, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        region = str(data.get("region") or "br").strip().lower()
+        if region not in ("br", "th", "de"):
+            return jsonify({"ok": False, "error": "region 仅支持 br/th/de"}), 400
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = paypal_check_service.enqueue_account_paypal_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+                region=region,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== IDEAL 检测 ==================== #
+    @app.post("/api/accounts/ideal-check")
+    def api_account_ideal_check():
+        """把单账号 IDEAL 检测加入后台队列。Body {account_id|email, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = ideal_check_service.enqueue_account_ideal_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/ideal-check-bulk")
+    def api_accounts_ideal_check_bulk():
+        """批量把 IDEAL 检测加入统一后台队列。Body {account_ids:[...], proxy?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = ideal_check_service.enqueue_account_ideal_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== GoPay 检测 ==================== #
+    @app.post("/api/accounts/gopay-check")
+    def api_account_gopay_check():
+        """把单账号 GoPay 检测加入后台队列。Body {account_id|email, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = gopay_check_service.enqueue_account_gopay_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/gopay-check-bulk")
+    def api_accounts_gopay_check_bulk():
+        """批量把 GoPay 检测加入统一后台队列。Body {account_ids:[...], proxy?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = gopay_check_service.enqueue_account_gopay_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== MoMo 提链 ==================== #
+    @app.get("/api/momo-link/records")
+    def api_momo_link_records():
+        """获取全部提链记录（不含 token）。"""
+        return jsonify({"ok": True, "records": momo_link_db.list_records()})
+
+    @app.post("/api/momo-link/add")
+    def api_momo_link_add():
+        """从账号列表添加提链记录。Body {account_ids: [...]}。
+        从 db 取账号的 email/plan/access_token，只添加 momo 检测成功的账号。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多添加 500 个账号"}), 400
+        accounts = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = (acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            accounts.append({
+                "id": acc_id,
+                "email": acc.get("email") or "",
+                "plan": acc.get("current_plan_type") or acc.get("plan_type") or "",
+                "access_token": token,
+            })
+        added = momo_link_db.add_records(accounts)
+        return jsonify({"ok": True, "added": added, "added_count": len(added), "skipped": skipped, "skipped_count": len(skipped)})
+
+    @app.post("/api/momo-link/extract")
+    def api_momo_link_extract():
+        """对单条记录执行提链。Body {record_id}。"""
+        data = request.get_json(silent=True) or {}
+        record_id = str(data.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 不能为空"}), 400
+        result = momo_link_service.enqueue_momo_link(record_id)
+        if result.get("busy"):
+            return jsonify({"ok": False, **result}), 409
+        if not result.get("accepted"):
+            return jsonify({"ok": False, **result}), 503
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/momo-link/extract-bulk")
+    def api_momo_link_extract_bulk():
+        """批量提链。Body {record_ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        result = momo_link_service.enqueue_momo_link_bulk([str(r) for r in ids])
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/momo-link/delete")
+    def api_momo_link_delete():
+        """删除记录。Body {record_ids: [...]} 或 {ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        deleted = momo_link_db.delete_records([str(r) for r in ids])
+        return jsonify({"ok": True, "deleted_count": deleted})
+
+    @app.get("/api/momo-link/proxy-pool")
+    def api_momo_link_proxy_pool_get():
+        """获取提链代理池。"""
+        return jsonify({"ok": True, "proxies": momo_link_db.get_proxy_pool()})
+
+    @app.post("/api/momo-link/proxy-pool")
+    def api_momo_link_proxy_pool_set():
+        """设置提链代理池。Body {text: "..."} 或 {proxies: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        if "text" in data:
+            valid = momo_link_db.set_proxy_pool(str(data.get("text") or ""))
+        elif "proxies" in data and isinstance(data.get("proxies"), list):
+            valid = momo_link_db.set_proxy_pool("\n".join(str(p) for p in data["proxies"]))
+        else:
+            return jsonify({"ok": False, "error": "需要 text 或 proxies 字段"}), 400
+        return jsonify({"ok": True, "proxies": valid, "count": len(valid)})
+
+    @app.get("/api/momo-link/log")
+    def api_momo_link_log():
+        """读取某条记录的提链日志。?record_id=xxx"""
+        record_id = (request.args.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 为空"}), 400
+        p = momo_link_service.log_path(record_id)
+        if not p.exists():
+            return jsonify({"ok": True, "log": "", "running": False})
+        max_bytes = 50_000
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            content = f.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": momo_link_service.is_running(record_id),
+        })
+
+    # ==================== GCash 提链 ==================== #
+    @app.get("/api/gcash-link/records")
+    def api_gcash_link_records():
+        """获取全部 GCash 提链记录（不含 token）。"""
+        return jsonify({"ok": True, "records": gcash_link_db.list_records()})
+
+    @app.post("/api/gcash-link/add")
+    def api_gcash_link_add():
+        """从账号列表添加 GCash 提链记录。Body {account_ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多添加 500 个账号"}), 400
+        accounts = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = (acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            accounts.append({
+                "id": acc_id,
+                "email": acc.get("email") or "",
+                "plan": acc.get("current_plan_type") or acc.get("plan_type") or "",
+                "access_token": token,
+            })
+        added = gcash_link_db.add_records(accounts)
+        return jsonify({"ok": True, "added": added, "added_count": len(added), "skipped": skipped, "skipped_count": len(skipped)})
+
+    @app.post("/api/gcash-link/extract")
+    def api_gcash_link_extract():
+        """对单条记录执行提链。Body {record_id}。"""
+        data = request.get_json(silent=True) or {}
+        record_id = str(data.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 不能为空"}), 400
+        result = gcash_link_service.enqueue_gcash_link(record_id)
+        if result.get("busy"):
+            return jsonify({"ok": False, **result}), 409
+        if not result.get("accepted"):
+            return jsonify({"ok": False, **result}), 503
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/gcash-link/extract-bulk")
+    def api_gcash_link_extract_bulk():
+        """批量提链。Body {record_ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        result = gcash_link_service.enqueue_gcash_link_bulk([str(r) for r in ids])
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/gcash-link/delete")
+    def api_gcash_link_delete():
+        """删除记录。Body {record_ids: [...]} 或 {ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        deleted = gcash_link_db.delete_records([str(r) for r in ids])
+        return jsonify({"ok": True, "deleted_count": deleted})
+
+    @app.get("/api/gcash-link/proxy-pool")
+    def api_gcash_link_proxy_pool_get():
+        """获取 GCash 提链代理池（主池 + promo 池）。"""
+        return jsonify({
+            "ok": True,
+            "proxies": gcash_link_db.get_proxy_pool(),
+            "promo_proxies": gcash_link_db.get_promo_proxy_pool(),
+        })
+
+    @app.post("/api/gcash-link/proxy-pool")
+    def api_gcash_link_proxy_pool_set():
+        """设置 GCash 提链代理池。Body {text, promo_text} 或 {proxies, promo_proxies}。
+        text/promo_text 为多行文本；promo 池用于 checkout/update。"""
+        data = request.get_json(silent=True) or {}
+        if "text" in data:
+            valid = gcash_link_db.set_proxy_pool(str(data.get("text") or ""))
+        elif "proxies" in data and isinstance(data.get("proxies"), list):
+            valid = gcash_link_db.set_proxy_pool("\n".join(str(p) for p in data["proxies"]))
+        else:
+            return jsonify({"ok": False, "error": "需要 text 或 proxies 字段"}), 400
+        promo_valid = []
+        if "promo_text" in data:
+            promo_valid = gcash_link_db.set_promo_proxy_pool(str(data.get("promo_text") or ""))
+        elif "promo_proxies" in data and isinstance(data.get("promo_proxies"), list):
+            promo_valid = gcash_link_db.set_promo_proxy_pool("\n".join(str(p) for p in data["promo_proxies"]))
+        return jsonify({
+            "ok": True,
+            "proxies": valid,
+            "count": len(valid),
+            "promo_proxies": promo_valid,
+            "promo_count": len(promo_valid),
+        })
+
+    @app.get("/api/gcash-link/log")
+    def api_gcash_link_log():
+        """读取某条记录的提链日志。?record_id=xxx"""
+        record_id = (request.args.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 为空"}), 400
+        p = gcash_link_service.log_path(record_id)
+        if not p.exists():
+            return jsonify({"ok": True, "log": "", "running": False})
+        max_bytes = 50_000
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            content = f.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": gcash_link_service.is_running(record_id),
+        })
+
+    # ==================== GoPay 提链 ==================== #
+    @app.get("/api/gopay-link/records")
+    def api_gopay_link_records():
+        """获取全部 GoPay 提链记录（不含 token）。"""
+        return jsonify({"ok": True, "records": gopay_link_db.list_records()})
+
+    @app.post("/api/gopay-link/add")
+    def api_gopay_link_add():
+        """从账号列表添加 GoPay 提链记录。Body {account_ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多添加 500 个账号"}), 400
+        accounts = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = (acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            accounts.append({
+                "id": acc_id,
+                "email": acc.get("email") or "",
+                "plan": acc.get("current_plan_type") or acc.get("plan_type") or "",
+                "access_token": token,
+            })
+        added = gopay_link_db.add_records(accounts)
+        return jsonify({"ok": True, "added": added, "added_count": len(added), "skipped": skipped, "skipped_count": len(skipped)})
+
+    @app.post("/api/gopay-link/extract")
+    def api_gopay_link_extract():
+        """对单条记录执行提链。Body {record_id}。"""
+        data = request.get_json(silent=True) or {}
+        record_id = str(data.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 不能为空"}), 400
+        result = gopay_link_service.enqueue_gopay_link(record_id)
+        if result.get("busy"):
+            return jsonify({"ok": False, **result}), 409
+        if not result.get("accepted"):
+            return jsonify({"ok": False, **result}), 503
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/gopay-link/extract-bulk")
+    def api_gopay_link_extract_bulk():
+        """批量提链。Body {record_ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        result = gopay_link_service.enqueue_gopay_link_bulk([str(r) for r in ids])
+        return jsonify({"ok": True, **result}), 202
+
+    @app.post("/api/gopay-link/delete")
+    def api_gopay_link_delete():
+        """删除记录。Body {record_ids: [...]} 或 {ids: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("record_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "record_ids 必须是非空数组"}), 400
+        deleted = gopay_link_db.delete_records([str(r) for r in ids])
+        return jsonify({"ok": True, "deleted_count": deleted})
+
+    @app.get("/api/gopay-link/proxy-pool")
+    def api_gopay_link_proxy_pool_get():
+        """获取 GoPay 提链代理池（主池 + promo 池）。"""
+        return jsonify({
+            "ok": True,
+            "proxies": gopay_link_db.get_proxy_pool(),
+            "promo_proxies": gopay_link_db.get_promo_proxy_pool(),
+        })
+
+    @app.post("/api/gopay-link/proxy-pool")
+    def api_gopay_link_proxy_pool_set():
+        """设置 GoPay 提链代理池。Body {text, promo_text} 或 {proxies, promo_proxies}。
+        text/promo_text 为多行文本；promo 池用于 checkout/update。"""
+        data = request.get_json(silent=True) or {}
+        if "text" in data:
+            valid = gopay_link_db.set_proxy_pool(str(data.get("text") or ""))
+        elif "proxies" in data and isinstance(data.get("proxies"), list):
+            valid = gopay_link_db.set_proxy_pool("\n".join(str(p) for p in data["proxies"]))
+        else:
+            return jsonify({"ok": False, "error": "需要 text 或 proxies 字段"}), 400
+        promo_valid = []
+        if "promo_text" in data:
+            promo_valid = gopay_link_db.set_promo_proxy_pool(str(data.get("promo_text") or ""))
+        elif "promo_proxies" in data and isinstance(data.get("promo_proxies"), list):
+            promo_valid = gopay_link_db.set_promo_proxy_pool("\n".join(str(p) for p in data["promo_proxies"]))
+        return jsonify({
+            "ok": True,
+            "proxies": valid,
+            "count": len(valid),
+            "promo_proxies": promo_valid,
+            "promo_count": len(promo_valid),
+        })
+
+    @app.get("/api/gopay-link/log")
+    def api_gopay_link_log():
+        """读取某条记录的提链日志。?record_id=xxx"""
+        record_id = (request.args.get("record_id") or "").strip()
+        if not record_id:
+            return jsonify({"ok": False, "error": "record_id 为空"}), 400
+        p = gopay_link_service.log_path(record_id)
+        if not p.exists():
+            return jsonify({"ok": True, "log": "", "running": False})
+        max_bytes = 50_000
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            content = f.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": gopay_link_service.is_running(record_id),
+        })
+
+    @app.get("/api/qr")
+    def api_qr():
+        """生成支付链接的二维码图片（PNG）。?url=xxx"""
+        url = (request.args.get("url") or "").strip()
+        if not url or not url.startswith("http"):
+            return jsonify({"ok": False, "error": "url 参数无效"}), 400
+        if len(url) > 4000:
+            return jsonify({"ok": False, "error": "url 过长"}), 400
+        try:
+            import io
+            import qrcode
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            return Response(
+                buf.getvalue(),
+                mimetype="image/png",
+                headers={"Cache-Control": "max-age=600"},
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"二维码生成失败: {exc}"}), 500
+
     @app.get("/api/extract-link/cdk")
     def api_extract_link_cdk():
         """查询当前配置或传入 CDK 的剩余次数。"""
@@ -701,7 +1805,8 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     def _is_extract_eligible(acc: dict) -> bool:
         plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "").lower()
-        return plan == "free" and bool(acc.get("plus_trial_eligible"))
+        # plus_trial_eligible 是拆分前套餐查询写入的旧字段，由共享谓词保留兜底。
+        return plan == "free" and account_has_trial_eligibility(acc)
 
     @app.post("/api/accounts/extract-link")
     def api_account_extract_link():
@@ -2478,16 +3583,23 @@ def create_app(auth_code: str | None = None) -> Flask:
             reload_err = f"{type(exc).__name__}: {exc}"
             logger.exception("配置热加载失败")
 
+        failed = result.get("failed") or []
+        note = (
+            "✅ 已保存并热加载，新值立即生效"
+            if reload_ok
+            else f"⚠️ 已写入文件但热加载失败（{reload_err}），需重启 Web 服务才能生效"
+        )
+        if failed:
+            note = f"⚠️ 部分字段值非法已跳过：{', '.join(failed[:8])}。其余字段已保存" + (
+                "并热加载" if reload_ok else "（热加载失败，需重启）"
+            )
         return jsonify({
             "ok": True,
             "updated": result["updated"],
             "ignored": result["ignored"],
+            "failed": failed,
             "reloaded": reload_ok,
-            "note": (
-                "✅ 已保存并热加载，新值立即生效"
-                if reload_ok
-                else f"⚠️ 已写入文件但热加载失败（{reload_err}），需重启 Web 服务才能生效"
-            ),
+            "note": note,
         })
 
     return app

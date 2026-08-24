@@ -347,7 +347,10 @@ def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
                 timezone = timezone.get("id") or timezone.get("name")
             geo = {
                 "ip": data.get("ip") or data.get("query"),
-                "country": (data.get("country") or data.get("country_code") or data.get("countryCode") or "").upper(),
+                "country": (
+                    data.get("country_code") or data.get("countryCode")
+                    or data.get("cc") or data.get("country") or ""
+                ).upper(),
                 "region": data.get("region") or data.get("regionName"),
                 "city": data.get("city"),
                 "timezone": timezone or "",

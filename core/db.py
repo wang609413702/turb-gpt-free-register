@@ -19,6 +19,12 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from config.trial import (
+    TRIAL_REGION_DETAIL_SUFFIXES,
+    TRIAL_REGION_FIELD_PREFIXES,
+    TRIAL_REGIONS,
+)
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
 _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
@@ -313,7 +319,7 @@ def _render_static_viewer(outlook_rows: list[dict] | None = None, account_rows: 
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>备注</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>地区</th><th>备注</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead>
         <tbody id="accountsBody"></tbody>
       </table>
     </div>
@@ -404,6 +410,7 @@ function render() {{
       <td><div class="main-cell">${{esc(r.email)}}</div><div class="sub-cell">${{esc(r.user_name || '-')}}</div></td>
       <td>${{esc(r.email_source || '-')}}</td>
       <td><span class="mono">${{esc(short(r.access_token || '', 42))}}</span></td>
+      <td>${{esc(r.registration_country || '-')}}</td>
       <td title="${{esc(r.note || '')}}">${{r.note ? esc(short(r.note, 60)) : '<span class="muted">-</span>'}}</td>
       <td>${{r.totp_secret ? '已启用' : '<span class="muted">未启用</span>'}}</td>
       <td class="muted">${{esc(r.created_at || '-')}}</td>
@@ -490,10 +497,18 @@ def _load_accounts() -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
-def _save_accounts(rows: list[dict]) -> None:
+def _save_accounts(rows: list[dict], sync_artifacts: bool = True) -> None:
+    """保存账号列表。
+
+    sync_artifacts=False 时只写 JSON（检测/查询等纯状态更新走快速路径），
+    跳过 TXT 同步与静态查看页渲染，避免批量后台任务高频全量 IO。
+    新账号、token/邮箱变化、删除、备注等账号内容变化仍走全量同步。
+    """
     for row in rows:
         row["copy_line"] = _account_line(row)
     _write_json(_ACCOUNTS_JSON, rows)
+    if not sync_artifacts:
+        return
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
     _render_static_viewer(account_rows=rows)
@@ -618,6 +633,7 @@ def insert_account(
     expires_at: str | None = None,
     device_id: str | None = None,
     proxy_used: str | None = None,
+    registration_country: str | None = None,
     email_source: str | None = None,
     extra: dict | None = None,
     codex_status: str | None = None,   # success / failed / skipped / missing
@@ -652,6 +668,7 @@ def insert_account(
             "expires_at": expires_at if expires_at is not None else row.get("expires_at"),
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
+            "registration_country": registration_country if registration_country else row.get("registration_country"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
             "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
             "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
@@ -691,7 +708,7 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
         row["codex_status"] = codex_status
         row["codex_error"] = codex_error
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -722,7 +739,7 @@ def claim_account_codex_agent(acc_id: int, trigger: str = "manual") -> bool:
         row["codex_agent_error"] = None
         row["codex_agent_message"] = "已入队"
         row["updated_at"] = now
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -738,7 +755,7 @@ def mark_account_codex_agent_running(acc_id: int) -> bool:
         row["codex_agent_error"] = None
         row["codex_agent_message"] = "正在生成 Codex Agent Token"
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -785,7 +802,7 @@ def update_account_codex_agent(acc_id: int, result: dict | None = None) -> bool:
             if result.get(src_key) is not None:
                 row[_k] = result.get(src_key)
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -805,7 +822,7 @@ def recover_interrupted_codex_agents() -> int:
             row["updated_at"] = now
             recovered += 1
         if recovered:
-            _save_accounts(accounts)
+            _save_accounts(accounts, sync_artifacts=False)
         return recovered
 
 
@@ -845,7 +862,7 @@ def claim_account_plan_check(
         row["plan_check_completed_at"] = None
         row["plan_check_error"] = None
         row["updated_at"] = now
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -860,7 +877,7 @@ def mark_account_plan_check_running(acc_id: int) -> bool:
         row["plan_check_started_at"] = _now()
         row["plan_check_error"] = None
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -880,7 +897,7 @@ def recover_interrupted_plan_checks() -> int:
             row["updated_at"] = now
             recovered += 1
         if recovered:
-            _save_accounts(accounts)
+            _save_accounts(accounts, sync_artifacts=False)
         return recovered
 
 
@@ -943,12 +960,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 if result.get(_k) is not None:
                     row[_k] = result.get(_k)
 
-            row["plus_trial_eligible"] = bool(result.get("plus_trial_eligible"))
-            row["plus_trial_campaign_id"] = result.get("plus_trial_campaign_id")
-            row["plus_trial_title"] = result.get("plus_trial_title")
-            row["plus_trial_discount_percentage"] = result.get("plus_trial_discount_percentage")
-            row["plus_trial_duration_num_periods"] = result.get("plus_trial_duration_num_periods")
-            row["plus_trial_duration_period"] = result.get("plus_trial_duration_period")
+            # 试用资格由按地区的资格查询单独写入（trial_<region>_*），
+            # 套餐查询不再回写 plus_trial_*，避免用非目标地区的出口覆盖资格结论。
             row["eligible_offer_ids"] = result.get("eligible_offer_ids") or []
             row["plan_last_success_at"] = result.get("checked_at") or _now()
             row["plan_last_success_result_json"] = json.dumps(result, ensure_ascii=False)
@@ -960,8 +973,150 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["token_expires_at"] = result.get("token_expires_at")
         row["plan_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
+
+
+# ============================== 试用资格查询（按地区） ============================== #
+_TRIAL_REGION_FIELD_PREFIX = TRIAL_REGION_FIELD_PREFIXES
+
+
+def claim_account_trial_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+    region: str = "jp",
+    claim_id: str | None = None,
+) -> bool:
+    """原子占用账号的试用资格查询；已有未超时查询时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("trial_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "trial_check_queued_at" if current_status == "queued" else "trial_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["trial_check_status"] = "queued"
+        row["trial_check_trigger"] = str(trigger or "manual")
+        row["trial_check_region"] = str(region or "jp").strip().lower()
+        row["trial_check_claim_id"] = str(claim_id or uuid.uuid4())
+        row["trial_check_queued_at"] = now
+        row["trial_check_started_at"] = None
+        row["trial_check_completed_at"] = None
+        row["trial_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_trial_check_running(acc_id: int, claim_id: str | None = None) -> bool:
+    """把当前 claim 的已排队资格查询标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("trial_check_status") not in {"queued", "running"}:
+            return False
+        if claim_id is not None and row.get("trial_check_claim_id") != claim_id:
+            return False
+        row["trial_check_status"] = "running"
+        row["trial_check_started_at"] = _now()
+        row["trial_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_trial_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    result: dict | None = None,
+    claim_id: str | None = None,
+) -> bool:
+    """更新账号按地区的 Plus 试用资格查询结果。
+
+    成功时只写本次查询地区的 trial_<region>_* 字段，其他地区结果不受影响；
+    失败时只更新错误与状态，不清空任何地区上一次成功的资格结果。
+    """
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+        if claim_id is not None and row.get("trial_check_claim_id") != claim_id:
+            return False
+
+        ok = bool(result.get("ok"))
+        region = str(result.get("region") or row.get("trial_check_region") or "").strip().lower()
+        row["trial_check_status"] = "success" if ok else "failed"
+        row["trial_check_ok"] = ok
+        row["trial_checked_at"] = result.get("checked_at") or _now()
+        row["trial_check_completed_at"] = _now()
+        row["trial_check_claim_id"] = None
+        row["trial_check_http_status"] = result.get("http_status")
+        row["trial_check_error"] = None if ok else result.get("error")
+        if region:
+            row["trial_check_region"] = region
+
+        if ok and region in _TRIAL_REGION_FIELD_PREFIX:
+            prefix = _TRIAL_REGION_FIELD_PREFIX[region]
+            row[f"{prefix}_eligible"] = bool(result.get("trial_eligible"))
+            row[f"{prefix}_checked_at"] = result.get("checked_at") or _now()
+            row[f"{prefix}_campaign_id"] = result.get("campaign_id")
+            row[f"{prefix}_title"] = result.get("title")
+            row[f"{prefix}_discount_percentage"] = result.get("discount_percentage")
+            row[f"{prefix}_duration_num_periods"] = result.get("duration_num_periods")
+            row[f"{prefix}_duration_period"] = result.get("duration_period")
+            row[f"{prefix}_last_success_at"] = result.get("checked_at") or _now()
+
+        row["trial_check_proxy_used"] = result.get("proxy_used")
+        row["trial_check_proxy_source"] = result.get("proxy_source")
+        row["trial_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_trial_checks() -> int:
+    """服务启动时把上次进程遗留的试用资格查询状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("trial_check_status") not in {"queued", "running"}:
+                continue
+            row["trial_check_status"] = "failed"
+            row["trial_check_ok"] = False
+            row["trial_check_error"] = "WebUI 重启导致试用资格查询中断，请重新查询"
+            row["trial_check_completed_at"] = now
+            row["trial_check_claim_id"] = None
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
 
 
 # ============================== MoMo 检测 ============================== #
@@ -1001,7 +1156,7 @@ def claim_account_momo_check(
         row["momo_check_completed_at"] = None
         row["momo_check_error"] = None
         row["updated_at"] = now
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1016,7 +1171,91 @@ def mark_account_momo_check_running(acc_id: int) -> bool:
         row["momo_check_started_at"] = _now()
         row["momo_check_error"] = None
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_momo_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["momo_exit_ip"] = str(exit_ip or "").strip()
+        row["momo_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+# ============================== GCash 检测 ============================== #
+def claim_account_gcash_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+) -> bool:
+    """原子占用账号的 GCash 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("gcash_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "gcash_check_queued_at" if current_status == "queued" else "gcash_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["gcash_check_status"] = "queued"
+        row["gcash_check_trigger"] = str(trigger or "manual")
+        row["gcash_check_queued_at"] = now
+        row["gcash_check_started_at"] = None
+        row["gcash_check_completed_at"] = None
+        row["gcash_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_gcash_check_running(acc_id: int) -> bool:
+    """把已排队的 GCash 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("gcash_check_status") not in {"queued", "running"}:
+            return False
+        row["gcash_check_status"] = "running"
+        row["gcash_check_started_at"] = _now()
+        row["gcash_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_gcash_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["gcash_exit_ip"] = str(exit_ip or "").strip()
+        row["gcash_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1044,23 +1283,75 @@ def update_account_momo_check(acc_id: int | None = None, email: str | None = Non
 
         # 检测失败只更新本次错误和网络信息，不覆盖上一次成功拿到的结论。
         if ok:
-            row["momo_has_momo"] = result.get("has_momo")
+            row["momo_has_momo"] = result.get("has_target")
             row["momo_decision"] = result.get("decision")
             row["momo_decision_text"] = result.get("decision_text")
             row["momo_supported"] = result.get("supported")
-            row["momo_conclusive"] = result.get("momo_conclusive")
+            row["momo_conclusive"] = result.get("conclusive")
             row["momo_methods"] = result.get("methods")
             row["momo_stripe_mode"] = result.get("stripe_mode")
             row["momo_checkout_provider"] = result.get("checkout_provider")
+            row["momo_session_kind"] = result.get("session_kind")
             row["momo_last_success_at"] = result.get("checked_at") or _now()
 
         row["momo_check_proxy_mode"] = result.get("proxy_mode")
         row["momo_check_network_route"] = result.get("network_route")
         row["momo_check_proxy_used"] = result.get("proxy_used")
         row["momo_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["momo_exit_ip"] = result.get("exit_ip")
+            row["momo_exit_country"] = result.get("exit_country")
         row["momo_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_gcash_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 GCash 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["gcash_check_status"] = "success" if ok else "failed"
+        row["gcash_ok"] = ok
+        row["gcash_checked_at"] = result.get("checked_at") or _now()
+        row["gcash_check_completed_at"] = _now()
+        row["gcash_check_http_status"] = result.get("http_status")
+        row["gcash_check_error"] = None if ok else result.get("error")
+
+        # 检测失败只更新本次错误和网络信息，不覆盖上一次成功拿到的结论。
+        if ok:
+            row["gcash_has_gcash"] = result.get("has_target")
+            row["gcash_decision"] = result.get("decision")
+            row["gcash_decision_text"] = result.get("decision_text")
+            row["gcash_supported"] = result.get("supported")
+            row["gcash_conclusive"] = result.get("conclusive")
+            row["gcash_methods"] = result.get("methods")
+            row["gcash_stripe_mode"] = result.get("stripe_mode")
+            row["gcash_checkout_provider"] = result.get("checkout_provider")
+            row["gcash_session_kind"] = result.get("session_kind")
+            row["gcash_last_success_at"] = result.get("checked_at") or _now()
+
+        row["gcash_check_proxy_mode"] = result.get("proxy_mode")
+        row["gcash_check_network_route"] = result.get("network_route")
+        row["gcash_check_proxy_used"] = result.get("proxy_used")
+        row["gcash_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["gcash_exit_ip"] = result.get("exit_ip")
+            row["gcash_exit_country"] = result.get("exit_country")
+        row["gcash_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1080,7 +1371,580 @@ def recover_interrupted_momo_checks() -> int:
             row["updated_at"] = now
             recovered += 1
         if recovered:
-            _save_accounts(accounts)
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
+def recover_interrupted_gcash_checks() -> int:
+    """服务启动时把上次进程遗留的 GCash 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("gcash_check_status") not in {"queued", "running"}:
+                continue
+            row["gcash_check_status"] = "failed"
+            row["gcash_ok"] = False
+            row["gcash_check_error"] = "WebUI 重启导致 GCash 检测中断，请重新检测"
+            row["gcash_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
+# ============================== Kakao 检测 ============================== #
+def claim_account_kakao_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+) -> bool:
+    """原子占用账号的 Kakao 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("kakao_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "kakao_check_queued_at" if current_status == "queued" else "kakao_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["kakao_check_status"] = "queued"
+        row["kakao_check_trigger"] = str(trigger or "manual")
+        row["kakao_check_queued_at"] = now
+        row["kakao_check_started_at"] = None
+        row["kakao_check_completed_at"] = None
+        row["kakao_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_kakao_check_running(acc_id: int) -> bool:
+    """把已排队的 Kakao 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("kakao_check_status") not in {"queued", "running"}:
+            return False
+        row["kakao_check_status"] = "running"
+        row["kakao_check_started_at"] = _now()
+        row["kakao_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_kakao_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["kakao_exit_ip"] = str(exit_ip or "").strip()
+        row["kakao_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_kakao_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 Kakao 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["kakao_check_status"] = "success" if ok else "failed"
+        row["kakao_ok"] = ok
+        row["kakao_checked_at"] = result.get("checked_at") or _now()
+        row["kakao_check_completed_at"] = _now()
+        row["kakao_check_http_status"] = result.get("http_status")
+        row["kakao_check_error"] = None if ok else result.get("error")
+
+        if ok:
+            row["kakao_has_kakao"] = result.get("has_target")
+            row["kakao_decision"] = result.get("decision")
+            row["kakao_decision_text"] = result.get("decision_text")
+            row["kakao_supported"] = result.get("supported")
+            row["kakao_conclusive"] = result.get("conclusive")
+            row["kakao_methods"] = result.get("methods")
+            row["kakao_stripe_mode"] = result.get("stripe_mode")
+            row["kakao_checkout_provider"] = result.get("checkout_provider")
+            row["kakao_session_kind"] = result.get("session_kind")
+            row["kakao_last_success_at"] = result.get("checked_at") or _now()
+
+        row["kakao_check_proxy_mode"] = result.get("proxy_mode")
+        row["kakao_check_network_route"] = result.get("network_route")
+        row["kakao_check_proxy_used"] = result.get("proxy_used")
+        row["kakao_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["kakao_exit_ip"] = result.get("exit_ip")
+            row["kakao_exit_country"] = result.get("exit_country")
+        row["kakao_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_kakao_checks() -> int:
+    """服务启动时把上次进程遗留的 Kakao 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("kakao_check_status") not in {"queued", "running"}:
+                continue
+            row["kakao_check_status"] = "failed"
+            row["kakao_ok"] = False
+            row["kakao_check_error"] = "WebUI 重启导致 Kakao 检测中断，请重新检测"
+            row["kakao_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
+# ============================== PayPal 检测 ============================== #
+def claim_account_paypal_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+    region: str | None = None,
+) -> bool:
+    """原子占用账号的 PayPal 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("paypal_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "paypal_check_queued_at" if current_status == "queued" else "paypal_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["paypal_check_status"] = "queued"
+        row["paypal_check_trigger"] = str(trigger or "manual")
+        if region:
+            row["paypal_check_region"] = str(region).strip().lower()
+        row["paypal_check_queued_at"] = now
+        row["paypal_check_started_at"] = None
+        row["paypal_check_completed_at"] = None
+        row["paypal_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_paypal_check_running(acc_id: int) -> bool:
+    """把已排队的 PayPal 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("paypal_check_status") not in {"queued", "running"}:
+            return False
+        row["paypal_check_status"] = "running"
+        row["paypal_check_started_at"] = _now()
+        row["paypal_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_paypal_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["paypal_exit_ip"] = str(exit_ip or "").strip()
+        row["paypal_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_paypal_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 PayPal 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["paypal_check_status"] = "success" if ok else "failed"
+        row["paypal_ok"] = ok
+        row["paypal_checked_at"] = result.get("checked_at") or _now()
+        row["paypal_check_completed_at"] = _now()
+        row["paypal_check_http_status"] = result.get("http_status")
+        row["paypal_check_error"] = None if ok else result.get("error")
+        if result.get("region"):
+            row["paypal_check_region"] = str(result.get("region")).strip().lower()
+
+        if ok:
+            row["paypal_has_paypal"] = result.get("has_target")
+            row["paypal_decision"] = result.get("decision")
+            row["paypal_decision_text"] = result.get("decision_text")
+            row["paypal_supported"] = result.get("supported")
+            row["paypal_conclusive"] = result.get("conclusive")
+            row["paypal_methods"] = result.get("methods")
+            row["paypal_stripe_mode"] = result.get("stripe_mode")
+            row["paypal_checkout_provider"] = result.get("checkout_provider")
+            row["paypal_session_kind"] = result.get("session_kind")
+            row["paypal_last_success_at"] = result.get("checked_at") or _now()
+
+        row["paypal_check_proxy_mode"] = result.get("proxy_mode")
+        row["paypal_check_network_route"] = result.get("network_route")
+        row["paypal_check_proxy_used"] = result.get("proxy_used")
+        row["paypal_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["paypal_exit_ip"] = result.get("exit_ip")
+            row["paypal_exit_country"] = result.get("exit_country")
+        row["paypal_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_paypal_checks() -> int:
+    """服务启动时把上次进程遗留的 PayPal 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("paypal_check_status") not in {"queued", "running"}:
+                continue
+            row["paypal_check_status"] = "failed"
+            row["paypal_ok"] = False
+            row["paypal_check_error"] = "WebUI 重启导致 PayPal 检测中断，请重新检测"
+            row["paypal_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
+# ============================== IDEAL 检测 ============================== #
+def claim_account_ideal_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+) -> bool:
+    """原子占用账号的 IDEAL 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("ideal_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "ideal_check_queued_at" if current_status == "queued" else "ideal_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["ideal_check_status"] = "queued"
+        row["ideal_check_trigger"] = str(trigger or "manual")
+        row["ideal_check_queued_at"] = now
+        row["ideal_check_started_at"] = None
+        row["ideal_check_completed_at"] = None
+        row["ideal_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_ideal_check_running(acc_id: int) -> bool:
+    """把已排队的 IDEAL 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("ideal_check_status") not in {"queued", "running"}:
+            return False
+        row["ideal_check_status"] = "running"
+        row["ideal_check_started_at"] = _now()
+        row["ideal_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_ideal_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["ideal_exit_ip"] = str(exit_ip or "").strip()
+        row["ideal_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_ideal_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 IDEAL 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["ideal_check_status"] = "success" if ok else "failed"
+        row["ideal_ok"] = ok
+        row["ideal_checked_at"] = result.get("checked_at") or _now()
+        row["ideal_check_completed_at"] = _now()
+        row["ideal_check_http_status"] = result.get("http_status")
+        row["ideal_check_error"] = None if ok else result.get("error")
+
+        if ok:
+            row["ideal_has_ideal"] = result.get("has_target")
+            row["ideal_decision"] = result.get("decision")
+            row["ideal_decision_text"] = result.get("decision_text")
+            row["ideal_supported"] = result.get("supported")
+            row["ideal_conclusive"] = result.get("conclusive")
+            row["ideal_methods"] = result.get("methods")
+            row["ideal_stripe_mode"] = result.get("stripe_mode")
+            row["ideal_checkout_provider"] = result.get("checkout_provider")
+            row["ideal_session_kind"] = result.get("session_kind")
+            row["ideal_last_success_at"] = result.get("checked_at") or _now()
+
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["ideal_exit_ip"] = result.get("exit_ip")
+            row["ideal_exit_country"] = result.get("exit_country")
+        row["ideal_check_proxy_mode"] = result.get("proxy_mode")
+        row["ideal_check_network_route"] = result.get("network_route")
+        row["ideal_check_proxy_used"] = result.get("proxy_used")
+        row["ideal_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        row["ideal_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_ideal_checks() -> int:
+    """服务启动时把上次进程遗留的 IDEAL 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("ideal_check_status") not in {"queued", "running"}:
+                continue
+            row["ideal_check_status"] = "failed"
+            row["ideal_ok"] = False
+            row["ideal_check_error"] = "WebUI 重启导致 IDEAL 检测中断，请重新检测"
+            row["ideal_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
+# ============================== GoPay 检测 ============================== #
+def claim_account_gopay_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+) -> bool:
+    """原子占用账号的 GoPay 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("gopay_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "gopay_check_queued_at" if current_status == "queued" else "gopay_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["gopay_check_status"] = "queued"
+        row["gopay_check_trigger"] = str(trigger or "manual")
+        row["gopay_check_queued_at"] = now
+        row["gopay_check_started_at"] = None
+        row["gopay_check_completed_at"] = None
+        row["gopay_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_gopay_check_running(acc_id: int) -> bool:
+    """把已排队的 GoPay 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("gopay_check_status") not in {"queued", "running"}:
+            return False
+        row["gopay_check_status"] = "running"
+        row["gopay_check_started_at"] = _now()
+        row["gopay_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_gopay_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["gopay_exit_ip"] = str(exit_ip or "").strip()
+        row["gopay_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_gopay_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 GoPay 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["gopay_check_status"] = "success" if ok else "failed"
+        row["gopay_ok"] = ok
+        row["gopay_checked_at"] = result.get("checked_at") or _now()
+        row["gopay_check_completed_at"] = _now()
+        row["gopay_check_http_status"] = result.get("http_status")
+        row["gopay_check_error"] = None if ok else result.get("error")
+
+        if ok:
+            row["gopay_has_gopay"] = result.get("has_target")
+            row["gopay_decision"] = result.get("decision")
+            row["gopay_decision_text"] = result.get("decision_text")
+            row["gopay_supported"] = result.get("supported")
+            row["gopay_conclusive"] = result.get("conclusive")
+            row["gopay_methods"] = result.get("methods")
+            row["gopay_stripe_mode"] = result.get("stripe_mode")
+            row["gopay_checkout_provider"] = result.get("checkout_provider")
+            row["gopay_session_kind"] = result.get("session_kind")
+            row["gopay_last_success_at"] = result.get("checked_at") or _now()
+
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["gopay_exit_ip"] = result.get("exit_ip")
+            row["gopay_exit_country"] = result.get("exit_country")
+        row["gopay_check_proxy_mode"] = result.get("proxy_mode")
+        row["gopay_check_network_route"] = result.get("network_route")
+        row["gopay_check_proxy_used"] = result.get("proxy_used")
+        row["gopay_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        row["gopay_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_gopay_checks() -> int:
+    """服务启动时把上次进程遗留的 GoPay 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("gopay_check_status") not in {"queued", "running"}:
+                continue
+            row["gopay_check_status"] = "failed"
+            row["gopay_ok"] = False
+            row["gopay_check_error"] = "WebUI 重启导致 GoPay 检测中断，请重新检测"
+            row["gopay_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
         return recovered
 
 
@@ -1112,7 +1976,7 @@ def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str =
         row["extract_link_error"] = None
         row["extract_link_message"] = "已入队"
         row["updated_at"] = now
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1128,7 +1992,7 @@ def mark_account_extract_running(acc_id: int) -> bool:
         row["extract_link_error"] = None
         row["extract_link_message"] = "任务运行中"
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1169,7 +2033,7 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
                 row["extract_link_cdk_remaining"] = payload.get("cdk_remaining")
             row["extract_link_result_json"] = json.dumps(payload, ensure_ascii=False)
         row["updated_at"] = _now()
-        _save_accounts(accounts)
+        _save_accounts(accounts, sync_artifacts=False)
         return True
 
 
@@ -1189,18 +2053,49 @@ def recover_interrupted_extract_links() -> int:
             row["updated_at"] = now
             recovered += 1
         if recovered:
-            _save_accounts(accounts)
+            _save_accounts(accounts, sync_artifacts=False)
         return recovered
 
 
+# 搜索关键字 → 支持列字段。账号页搜索输入这些关键字时按"账号支持该能力"筛选，
+# 而不是整行子串匹配（否则会命中错误文本里恰好含渠道名的账号）。
+# 支持取反：-gcash / !gcash = 不支持或未检测。
+_CAPABILITY_QUERY_FIELDS = {
+    "gcash": "gcash_has_gcash",
+    "momo": "momo_has_momo",
+    "kakao": "kakao_has_kakao",
+    "paypal": "paypal_has_paypal",
+    "ideal": "ideal_has_ideal",
+    "gopay": "gopay_has_gopay",
+    **{
+        f"trial_{region}": f"trial_{region}_eligible"
+        for region in TRIAL_REGIONS
+    },
+}
+
+
 def _account_matches_query(row: dict, q: str | None) -> bool:
-    q = str(q or "").strip().lower()
-    if not q:
+    text = str(q or "").strip().lower()
+    if not text:
         return True
-    try:
-        return q in "\n".join(str(v) for v in row.values()).lower()
-    except Exception:
-        return False
+    row_text: str | None = None
+    for token in text.split():
+        negate = token.startswith(("!", "-"))
+        key = token[1:] if negate else token
+        field = _CAPABILITY_QUERY_FIELDS.get(key)
+        if field is not None:
+            # 关键字命中 = 支持列字段为 True（未检测/不支持都不算）。
+            if (row.get(field) is True) == negate:
+                return False
+            continue
+        if row_text is None:
+            try:
+                row_text = "\n".join(str(v) for v in row.values()).lower()
+            except Exception:
+                return False
+        if (key in row_text) == negate:
+            return False
+    return True
 
 
 def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
@@ -1229,6 +2124,16 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
+        # 按地区试用资格查询
+        "trial_check_status", "trial_check_ok", "trial_check_error",
+        "trial_check_trigger", "trial_check_region", "trial_check_queued_at",
+        "trial_check_started_at", "trial_check_completed_at",
+        "trial_checked_at", "trial_check_proxy_used",
+        *tuple(
+            f"{TRIAL_REGION_FIELD_PREFIXES[region]}_{suffix}"
+            for region in TRIAL_REGIONS
+            for suffix in TRIAL_REGION_DETAIL_SUFFIXES
+        ),
         "extract_link_status", "extract_link_ok", "extract_link_type",
         "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste",
@@ -1241,10 +2146,51 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         # MoMo 检测
         "momo_check_status", "momo_ok", "momo_has_momo", "momo_decision",
         "momo_decision_text", "momo_supported", "momo_conclusive",
-        "momo_methods", "momo_stripe_mode", "momo_checkout_provider",
+        "momo_methods", "momo_stripe_mode", "momo_checkout_provider", "momo_session_kind",
         "momo_check_error", "momo_check_trigger", "momo_check_queued_at",
         "momo_check_started_at", "momo_check_completed_at",
         "momo_checked_at", "momo_last_success_at",
+        "momo_exit_ip", "momo_exit_country",
+        # GCash 检测
+        "gcash_check_status", "gcash_ok", "gcash_has_gcash", "gcash_decision",
+        "gcash_decision_text", "gcash_supported", "gcash_conclusive",
+        "gcash_methods", "gcash_stripe_mode", "gcash_checkout_provider", "gcash_session_kind",
+        "gcash_check_error", "gcash_check_trigger", "gcash_check_queued_at",
+        "gcash_check_started_at", "gcash_check_completed_at",
+        "gcash_checked_at", "gcash_last_success_at",
+        "gcash_exit_ip", "gcash_exit_country",
+        # Kakao 检测
+        "kakao_check_status", "kakao_ok", "kakao_has_kakao", "kakao_decision",
+        "kakao_decision_text", "kakao_supported", "kakao_conclusive",
+        "kakao_methods", "kakao_stripe_mode", "kakao_checkout_provider", "kakao_session_kind",
+        "kakao_check_error", "kakao_check_trigger", "kakao_check_queued_at",
+        "kakao_check_started_at", "kakao_check_completed_at",
+        "kakao_checked_at", "kakao_last_success_at",
+        "kakao_exit_ip", "kakao_exit_country",
+        # PayPal 检测
+        "paypal_check_status", "paypal_ok", "paypal_has_paypal", "paypal_decision",
+        "paypal_decision_text", "paypal_supported", "paypal_conclusive",
+        "paypal_methods", "paypal_stripe_mode", "paypal_checkout_provider", "paypal_session_kind",
+        "paypal_check_error", "paypal_check_trigger", "paypal_check_queued_at",
+        "paypal_check_started_at", "paypal_check_completed_at",
+        "paypal_checked_at", "paypal_last_success_at",
+        "paypal_exit_ip", "paypal_exit_country", "paypal_check_region",
+        # IDEAL 检测
+        "ideal_check_status", "ideal_ok", "ideal_has_ideal", "ideal_decision",
+        "ideal_decision_text", "ideal_supported", "ideal_conclusive",
+        "ideal_methods", "ideal_stripe_mode", "ideal_checkout_provider", "ideal_session_kind",
+        "ideal_check_error", "ideal_check_trigger", "ideal_check_queued_at",
+        "ideal_check_started_at", "ideal_check_completed_at",
+        "ideal_checked_at", "ideal_last_success_at",
+        "ideal_exit_ip", "ideal_exit_country",
+        # GoPay 检测
+        "gopay_check_status", "gopay_ok", "gopay_has_gopay", "gopay_decision",
+        "gopay_decision_text", "gopay_supported", "gopay_conclusive",
+        "gopay_methods", "gopay_stripe_mode", "gopay_checkout_provider", "gopay_session_kind",
+        "gopay_check_error", "gopay_check_trigger", "gopay_check_queued_at",
+        "gopay_check_started_at", "gopay_check_completed_at",
+        "gopay_checked_at", "gopay_last_success_at",
+        "gopay_exit_ip", "gopay_exit_country",
         "momo_check_network_route", "momo_check_proxy_used",
     )
     with _LOCK:
@@ -1284,12 +2230,35 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    "trial_check_status": row.get("trial_check_status"),
+                    "trial_check_error": row.get("trial_check_error"),
+                    "trial_check_region": row.get("trial_check_region"),
+                    **{
+                        f"{TRIAL_REGION_FIELD_PREFIXES[region]}_{suffix}": row.get(
+                            f"{TRIAL_REGION_FIELD_PREFIXES[region]}_{suffix}"
+                        )
+                        for region in TRIAL_REGIONS
+                        for suffix in TRIAL_REGION_DETAIL_SUFFIXES
+                    },
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
                     "momo_check_status": row.get("momo_check_status"),
                     "momo_has_momo": row.get("momo_has_momo"),
                     "momo_decision": row.get("momo_decision"),
+                    "momo_exit_ip": row.get("momo_exit_ip"),
+                    "momo_exit_country": row.get("momo_exit_country"),
+                    "gcash_check_status": row.get("gcash_check_status"),
+                    "gcash_has_gcash": row.get("gcash_has_gcash"),
+                    "gcash_decision": row.get("gcash_decision"),
+                    "gcash_exit_ip": row.get("gcash_exit_ip"),
+                    "gcash_exit_country": row.get("gcash_exit_country"),
+                    "kakao_check_status": row.get("kakao_check_status"),
+                    "kakao_has_kakao": row.get("kakao_has_kakao"),
+                    "paypal_check_status": row.get("paypal_check_status"),
+                    "paypal_has_paypal": row.get("paypal_has_paypal"),
+                    "ideal_check_status": row.get("ideal_check_status"),
+                    "ideal_has_ideal": row.get("ideal_has_ideal"),
                 }
                 for row in all_rows
             ],

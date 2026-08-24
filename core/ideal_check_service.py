@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""MoMo 支付支持检测后台队列。
+"""IDEAL 支付支持检测后台队列。
 
-完全镜像 core/plan_check_service.py：模块级线程池 + 信号量限流 + 原子占用，
-单账号入队执行 check_account_momo 并把结果写回 db。
+镜像 core/kakao_check_service.py，使用独立 IDEAL 代理池（建议 NL 出口）。
 """
 from __future__ import annotations
 
@@ -14,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from config import proxy as proxy_cfg
-from config.proxy import pick_momo_proxy
+from config.proxy import pick_ideal_proxy
 from core import db
-from core.chatgpt_momo import check_account_momo
+from core.chatgpt_momo import check_account_ideal
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,9 @@ def _float_setting(name: str, default: float, lower: float, upper: float) -> flo
     return max(lower, min(upper, value))
 
 
-_WORKERS = _int_setting("MOMO_CHECK_WORKERS", 3, 1, 16)
-_QUEUE_LIMIT = _int_setting("MOMO_CHECK_QUEUE_LIMIT", 500, _WORKERS, 5000)
-_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="momo-check")
+_WORKERS = _int_setting("IDEAL_CHECK_WORKERS", 3, 1, 16)
+_QUEUE_LIMIT = _int_setting("IDEAL_CHECK_QUEUE_LIMIT", 500, _WORKERS, 5000)
+_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="ideal-check")
 _QUEUE_SLOTS = threading.BoundedSemaphore(_QUEUE_LIMIT)
 _RATE_LOCK = threading.Lock()
 _NEXT_REQUEST_AT = 0.0
@@ -48,8 +47,8 @@ _NEXT_REQUEST_AT = 0.0
 def _wait_for_rate_slot() -> None:
     """为所有检测线程分配错开的请求启动时间。"""
     global _NEXT_REQUEST_AT
-    min_interval = _float_setting("MOMO_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0)
-    jitter = _float_setting("MOMO_CHECK_JITTER", 0.3, 0.0, 30.0)
+    min_interval = _float_setting("IDEAL_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0)
+    jitter = _float_setting("IDEAL_CHECK_JITTER", 0.3, 0.0, 30.0)
     with _RATE_LOCK:
         now = time.monotonic()
         scheduled = max(now, _NEXT_REQUEST_AT) + (random.uniform(0.0, jitter) if jitter else 0.0)
@@ -59,7 +58,7 @@ def _wait_for_rate_slot() -> None:
         time.sleep(wait_seconds)
 
 
-def _run_account_momo_check(
+def _run_account_ideal_check(
     *,
     account_id: int,
     email: str,
@@ -68,23 +67,21 @@ def _run_account_momo_check(
     proxy: str | None,
 ) -> dict:
     try:
-        if not db.mark_account_momo_check_running(account_id):
-            return {"ok": False, "error": "账号已删除或 MoMo 检测状态已被重置"}
+        if not db.mark_account_ideal_check_running(account_id):
+            return {"ok": False, "error": "账号已删除或 IDEAL 检测状态已被重置"}
 
-        # 前端未显式覆盖时，MoMo 检测单独使用专用代理池轮换；池为空则直连。
-        # 传非 None 的 proxy 让 resolve_plan_check_route 走显式覆盖分支，
-        # 绕开 PLAN_CHECK 网络配置，只用 MoMo 池。
+        # 前端未显式覆盖时，IDEAL 检测单独使用专用代理池轮换；池为空则直连。
         if proxy is None:
-            proxy = pick_momo_proxy()
+            proxy = pick_ideal_proxy()
 
         _wait_for_rate_slot()
-        result = check_account_momo(access_token, proxy=proxy)
+        result = check_account_ideal(access_token, proxy=proxy)
 
-        db.update_account_momo_check(acc_id=account_id, result=result)
+        db.update_account_ideal_check(acc_id=account_id, result=result)
         if result.get("ok"):
             has_target = result.get("has_target")
             logger.info(
-                "[MoMo] 后台检测成功: %s, decision=%s, has_momo=%s, trigger=%s",
+                "[IDEAL] 后台检测成功: %s, decision=%s, has_ideal=%s, trigger=%s",
                 email,
                 result.get("decision"),
                 has_target,
@@ -92,7 +89,7 @@ def _run_account_momo_check(
             )
         else:
             logger.warning(
-                "[MoMo] 后台检测失败: %s, trigger=%s, error=%s",
+                "[IDEAL] 后台检测失败: %s, trigger=%s, error=%s",
                 email,
                 trigger,
                 result.get("error") or "未知错误",
@@ -106,16 +103,16 @@ def _run_account_momo_check(
             "decision": "checkout_failed",
         }
         try:
-            db.update_account_momo_check(acc_id=account_id, result=result)
+            db.update_account_ideal_check(acc_id=account_id, result=result)
         except Exception:
-            logger.exception("[MoMo] 写入后台检测异常状态失败: account_id=%s", account_id)
-        logger.exception("[MoMo] 后台检测异常: %s", email)
+            logger.exception("[IDEAL] 写入后台检测异常状态失败: account_id=%s", account_id)
+        logger.exception("[IDEAL] 后台检测异常: %s", email)
         return result
     finally:
         _QUEUE_SLOTS.release()
 
 
-def enqueue_account_momo_check(
+def enqueue_account_ideal_check(
     *,
     account_id: int,
     email: str,
@@ -130,15 +127,15 @@ def enqueue_account_momo_check(
     if not access_token:
         return {"accepted": False, "busy": False, "error": "账号缺少 access_token"}
     if not _QUEUE_SLOTS.acquire(blocking=False):
-        return {"accepted": False, "busy": False, "queue_full": True, "error": "MoMo 检测队列已满，请稍后重试"}
+        return {"accepted": False, "busy": False, "queue_full": True, "error": "IDEAL 检测队列已满，请稍后重试"}
 
-    if not db.claim_account_momo_check(acc_id=account_id, trigger=trigger):
+    if not db.claim_account_ideal_check(acc_id=account_id, trigger=trigger):
         _QUEUE_SLOTS.release()
-        return {"accepted": False, "busy": True, "error": "该账号正在检测 MoMo"}
+        return {"accepted": False, "busy": True, "error": "该账号正在检测 IDEAL"}
 
     try:
         _EXECUTOR.submit(
-            _run_account_momo_check,
+            _run_account_ideal_check,
             account_id=account_id,
             email=email,
             access_token=access_token,
@@ -150,10 +147,10 @@ def enqueue_account_momo_check(
         result = {
             "ok": False,
             "checked_at": datetime.now().isoformat(timespec="seconds"),
-            "error": f"MoMo 检测入队失败: {type(exc).__name__}: {str(exc)[:160]}",
+            "error": f"IDEAL 检测入队失败: {type(exc).__name__}: {str(exc)[:160]}",
             "decision": "checkout_failed",
         }
-        db.update_account_momo_check(acc_id=account_id, result=result)
+        db.update_account_ideal_check(acc_id=account_id, result=result)
         return {"accepted": False, "busy": False, "error": result["error"]}
 
     return {
@@ -170,6 +167,6 @@ def queue_settings() -> dict:
     return {
         "workers": _WORKERS,
         "queue_limit": _QUEUE_LIMIT,
-        "min_interval": _float_setting("MOMO_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0),
-        "jitter": _float_setting("MOMO_CHECK_JITTER", 0.3, 0.0, 30.0),
+        "min_interval": _float_setting("IDEAL_CHECK_MIN_INTERVAL", 0.4, 0.0, 30.0),
+        "jitter": _float_setting("IDEAL_CHECK_JITTER", 0.3, 0.0, 30.0),
     }

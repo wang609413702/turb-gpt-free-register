@@ -1,0 +1,8 @@
+{
+  "name": "gpt-free-register",
+  "private": true,
+  "description": "本地 Node 依赖：支付检测 Sentinel 令牌生成（core/gen_token_jsdom.js 需要 jsdom）",
+  "dependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

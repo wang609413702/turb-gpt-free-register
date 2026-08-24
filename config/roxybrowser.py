@@ -63,6 +63,11 @@ ROXY_KEEP_BROWSER_OPEN: bool = False
 ROXY_API_RETRIES: int = 3
 ROXY_API_RETRY_DELAY: int = 2
 
+# create 接口返回「正在创建中，请稍等！」（环境创建仍在进行）时，等待后重试：
+# 首次请求 + ROXY_CREATE_RETRIES 次重试，仍失败才标记失败；其余 create 错误不重试，避免超时后重复创建孤儿环境。
+ROXY_CREATE_RETRIES: int = 3
+ROXY_CREATE_RETRY_DELAY: int = 5
+
 # 环境生命周期：
 #   True  = 一号一环境：每个账号强制创建新 Profile，用完关闭并删除，不允许复用 ROXY_PROFILE_ID
 #   False = 可复用 ROXY_PROFILE_ID 或只关闭不删除
@@ -109,5 +114,19 @@ ROXY_PROFILE_CREATE_PAYLOAD: dict = {
 # Roxy Codex 授权等待 callback 的最长秒数
 ROXY_CODEX_CALLBACK_TIMEOUT: int = 180
 
+# 注册流程 HAR 采集（调试/协议对齐用，默认关闭）：
+#   True  = 通过 CDP 采集整个注册流程的请求信息并导出标准 HAR + JS 指纹快照，
+#           产物在 ROXY_HAR_OUTPUT_DIR（默认项目根 har_captures/），
+#           可直接喂给 tools/analyze_har_protocol.py 反哺纯协议对齐。
+#   False = 不采集，零开销。
+ROXY_CAPTURE_HAR: bool = False
+
+# 采集产物输出目录；留空默认项目根 har_captures/。
+ROXY_HAR_OUTPUT_DIR: str = ""
+
+# True 时 HAR 中 cookie/authorization/sentinel-token 等敏感头值与 OTP/密码请求体打码，
+# 保留字段名和长度；False 保留原始值（注意文件含登录态信息）。
+ROXY_HAR_REDACT: bool = True
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})
+apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CREATE_RETRIES': 'int', 'ROXY_CREATE_RETRY_DELAY': 'int', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int', 'ROXY_CAPTURE_HAR': 'bool', 'ROXY_HAR_OUTPUT_DIR': 'str', 'ROXY_HAR_REDACT': 'bool'})

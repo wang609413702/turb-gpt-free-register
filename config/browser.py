@@ -20,21 +20,25 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
-def _latest_chrome_major(default: str = "149") -> str:
-    """兼容旧模块导入；默认按 2026-07-19 抓包里的 Chrome 149 画像。"""
+def _latest_chrome_major(default: str = "142") -> str:
+    """兼容旧模块导入；默认对齐 curl_cffi 当前实际使用的 Chrome 版本。"""
     return default
 
 
-CHROME_MAJOR = "149"
-CHROME_FULL_VERSION = "149.0.0.0"
+# Chrome 主版本必须与 IMPERSONATE 一致，保证 TLS/HTTP2 握手指纹与 UA/sec-ch-ua
+# 声明的版本自洽。2026-08-22 起 Cloudflare 对 chrome146 的 curl_cffi 指纹下发
+# managed challenge（多出口 IP + 直连均 403），chrome142 实测仍可正常访问，
+# 因此整体从 146 回退对齐到 142。
+CHROME_MAJOR = "142"
+CHROME_FULL_VERSION = "142.0.0.0"
 
 SAFARI_VERSION = ""
 SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 0.15 当前最高内置到 chrome146；HTTP/JS 画像按抓包补齐到 Chrome/149。
-IMPERSONATE = "chrome146"
+# UA/sec-ch-ua 同步对齐到 142，保证 TLS 握手版本与 HTTP 头声明的 Chrome 版本一致。
+IMPERSONATE = "chrome142"
 
 # ---------- 桌面 Chrome 画像 ----------
 BROWSER_FAMILY = "chrome"
@@ -49,8 +53,10 @@ USER_AGENT = (
     f"Chrome/{CHROME_FULL_VERSION} Safari/{SAFARI_WEBKIT_VERSION}"
 )
 
-SEC_CH_UA = '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'
-SEC_CH_UA_FULL_VERSION_LIST = '"Google Chrome";v="149.0.0.0", "Chromium";v="149.0.0.0", "Not)A;Brand";v="24.0.0.0"'
+# sec-ch-ua：GREASE 品牌/顺序沿用 2026-08-14 真实浏览器采集形态（Not;A=Brand v=8），
+# Chromium/Google Chrome 版本号与 IMPERSONATE 一致（142）。
+SEC_CH_UA = '"Not;A=Brand";v="8", "Chromium";v="142", "Google Chrome";v="142"'
+SEC_CH_UA_FULL_VERSION_LIST = '"Not;A=Brand";v="8.0.0.0", "Chromium";v="142.0.0.0", "Google Chrome";v="142.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
 SEC_CH_UA_MOBILE = "?0"
@@ -65,9 +71,11 @@ BROWSER_LOCALE_PROFILE = "jp"
 AUTO_BROWSER_LOCALE_FROM_IP = True
 IP_GEO_TIMEOUT = 6.0
 IP_GEO_ENDPOINTS = [
+    "https://ipwhois.app/json/",
+    "https://freeipapi.com/api/json",
+    "https://api.myip.com",
     "https://ipinfo.io/json",
     "https://ipapi.co/json",
-    "https://ipwho.is/",
 ]
 
 # 代理出口质量诊断：默认不拦截，只在手动开启时拒绝云厂商/DC ASN。

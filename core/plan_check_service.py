@@ -11,7 +11,7 @@ from datetime import datetime
 
 from config import proxy as proxy_cfg
 from core import db
-from core.chatgpt_plan import check_account_plan
+from core.chatgpt_plan import check_account_plan, token_claims
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,6 @@ def _wait_for_rate_slot() -> None:
         time.sleep(wait_seconds)
 
 
-def _registration_recheck_delay() -> float:
-    return _float_setting("PLAN_CHECK_REGISTRATION_RECHECK_DELAY", 2.0, 0.0, 30.0)
-
-
 def _run_plan_check(
     *,
     account_id: int,
@@ -78,40 +74,12 @@ def _run_plan_check(
             timezone_offset_min=timezone_offset_min,
         )
 
-        recheck_delay = _registration_recheck_delay()
-        should_recheck = (
-            trigger == "registration_auto"
-            and recheck_delay > 0
-            and bool(result.get("ok"))
-            and str(result.get("current_plan_type") or "").lower() == "free"
-            and not bool(result.get("plus_trial_eligible"))
-        )
-        if should_recheck:
-            logger.info("[Plan] 新账号暂未发现 Plus 试用资格，%.1fs 后复查一次: %s", recheck_delay, email)
-            time.sleep(recheck_delay)
-            _wait_for_rate_slot()
-            recheck_result = check_account_plan(
-                access_token,
-                proxy=proxy,
-                timezone_offset_min=timezone_offset_min,
-                max_attempts=1,
-            )
-            if recheck_result.get("ok"):
-                result = recheck_result
-            else:
-                logger.warning(
-                    "[Plan] 新账号资格复查失败，保留首次成功结果: %s, %s",
-                    email,
-                    recheck_result.get("error") or "未知错误",
-                )
-
         db.update_account_plan_check(acc_id=account_id, result=result)
         if result.get("ok"):
             logger.info(
-                "[Plan] 后台查询成功: %s, plan=%s, plus_trial=%s, trigger=%s",
+                "[Plan] 后台查询成功: %s, plan=%s, trigger=%s",
                 email,
                 result.get("current_plan_type") or "unknown",
-                bool(result.get("plus_trial_eligible")),
                 trigger,
             )
         else:
@@ -145,7 +113,7 @@ def enqueue_account_plan_check(
     access_token: str,
     trigger: str,
     proxy: str | None = None,
-    timezone_offset_min: str = "-",
+    timezone_offset_min: str = "-480",
 ) -> dict:
     """把查询放入统一线程池；重复查询或队列满时不提交。"""
     account_id = int(account_id)
@@ -153,6 +121,13 @@ def enqueue_account_plan_check(
     access_token = str(access_token or "").strip()
     if not access_token:
         return {"accepted": False, "busy": False, "error": "账号缺少 access_token"}
+    if token_claims(access_token).get("token_expired") is True:
+        return {
+            "accepted": False,
+            "busy": False,
+            "needs_live_check": True,
+            "error": "AT已过期/失效，请先查活刷新后再查询套餐",
+        }
     if not _QUEUE_SLOTS.acquire(blocking=False):
         return {"accepted": False, "busy": False, "queue_full": True, "error": "套餐查询队列已满，请稍后重试"}
 
@@ -168,7 +143,7 @@ def enqueue_account_plan_check(
             access_token=access_token,
             trigger=str(trigger or "manual"),
             proxy=proxy,
-            timezone_offset_min=str(timezone_offset_min or "-"),
+            timezone_offset_min=str(timezone_offset_min or "-480"),
         )
     except Exception as exc:
         _QUEUE_SLOTS.release()

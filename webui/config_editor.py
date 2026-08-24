@@ -10,13 +10,16 @@
     4. 读取时优先 `.env`，缺失时回退解析 `config/*.py` 默认值。
 """
 import ast
+import logging
 import os
 import re
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
-EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL"}
+EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL"}
 
 
 # ============================================================
@@ -263,6 +266,14 @@ EDITABLE_FIELDS = [
         "label": "删除接口路径", "help": "默认 /browser/delete；如 Roxy 版本不同可调整",
     },
     {
+        "key": "ROXY_CREATE_RETRIES", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
+        "label": "创建环境重试次数", "help": "create 接口返回「正在创建中，请稍等！」时的重试次数（首次请求之外）；仍失败才标记失败，其余 create 错误不重试",
+    },
+    {
+        "key": "ROXY_CREATE_RETRY_DELAY", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
+        "label": "创建环境重试间隔", "help": "「正在创建中」重试前等待秒数，每次重试递增；默认 5 秒",
+    },
+    {
         "key": "CODEX_OAUTH_DRIVER", "file": "codex.py", "type": "str", "group": "Codex",
         "label": "Codex授权驱动", "help": "默认推荐 roxy；protocol=原协议授权；roxy=用 RoxyBrowser；cloak=用 CloakBrowser；browser_use=用 Browser Use Cloud；skyvern=用 Skyvern；same_as_registration=跟随注册驱动",
     },
@@ -271,8 +282,28 @@ EDITABLE_FIELDS = [
         "label": "Codex回调超时", "help": "Roxy Codex OAuth 等待 localhost:1455 callback 的最长秒数",
     },
     {
+        "key": "ROXY_CAPTURE_HAR", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
+        "label": "注册流程HAR采集", "help": "通过 CDP 采集整个注册流程的请求信息并导出标准 HAR + JS 指纹快照（默认关闭）；产物可直接喂给 tools/analyze_har_protocol.py 反哺纯协议对齐",
+    },
+    {
+        "key": "ROXY_HAR_OUTPUT_DIR", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "HAR输出目录", "help": "采集产物输出目录；留空默认项目根 har_captures/",
+    },
+    {
+        "key": "ROXY_HAR_REDACT", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
+        "label": "HAR敏感值脱敏", "help": "True 时 cookie/authorization/sentinel-token 等敏感头值与 OTP/密码请求体打码，保留字段名和长度；False 保留原始值（注意文件含登录态信息）",
+    },
+    {
         "key": "ENABLE_2FA", "file": "twofa.py", "type": "bool", "group": "功能开关",
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
+    },
+    {
+        "key": "PROTOCOL_ASSET_WARMUP", "file": "openai_protocol.py", "type": "bool", "group": "功能开关",
+        "label": "纯协议资源预热", "help": "实验性，默认关。开启后在协议注册加载关键页面后，解析并抓取 HTML 引用的 CSS/JS/字体/图片，把请求画像从 ~18 条拉到接近真实浏览器（数百条），降低“零资源加载”自动化特征。仅影响纯协议流程(roxy 不受影响)，失败一律吞掉不影响注册",
+    },
+    {
+        "key": "PROTOCOL_ASSET_WARMUP_MAX_PER_PAGE", "file": "openai_protocol.py", "type": "int", "group": "功能开关",
+        "label": "资源预热每页上限", "help": "单页最多抓取的静态资源数，控制耗时；默认 60，真实页面资源很多可按需调大",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
@@ -450,48 +481,142 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "MOMO_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
-        "label": "MoMo检测代理池(每行一个)", "help": "每行一个代理；支持 socks5/socks5h 完整 URL，或 host:port:user:pass 自动补 socks5h://。MoMo 检测单独使用此池；留空则直连",
+        "label": "MoMo检测代理池(每行一个)", "help": "每行一个代理；支持 socks5/socks5h 完整 URL，或 host:port:user:pass 自动补 socks5h://。MoMo 检测单独使用此池，建议 VN 出口；留空则直连",
     },
     {
-        "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
+        "key": "GCASH_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "GCash检测代理池(每行一个)", "help": "每行一个代理；支持 socks5/socks5h 完整 URL，或 host:port:user:pass 自动补 socks5h://。GCash 检测单独使用此池，建议 PH 出口；留空则直连",
+    },
+    {
+        "key": "KAKAO_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "Kakao检测代理池(每行一个)", "help": "每行一个代理；建议 KR 出口。Kakao 检测单独使用此池；留空则直连",
+    },
+    {
+        "key": "PAYPAL_BR_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "PayPal检测代理池-BR(每行一个)", "help": "每行一个代理；建议 BR 出口。PayPal「BR检测」使用此池（BR/BRL 结账）；留空则直连",
+    },
+    {
+        "key": "PAYPAL_TH_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "PayPal检测代理池-TH(每行一个)", "help": "每行一个代理；建议 TH 出口。PayPal「TH检测」使用此池（TH/THB 结账）；留空则直连",
+    },
+    {
+        "key": "PAYPAL_DE_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "PayPal检测代理池-DE(每行一个)", "help": "每行一个代理；建议 DE 出口。PayPal「DE检测」使用此池（DE/EUR 结账）；留空则直连",
+    },
+    {
+        "key": "IDEAL_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "IDEAL检测代理池(每行一个)", "help": "每行一个代理；建议 NL 出口。IDEAL 检测单独使用此池；留空则直连",
+    },
+    {
+        "key": "GOPAY_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "GoPay检测代理池(每行一个)", "help": "每行一个代理；建议 ID 出口。GoPay 检测单独使用此池（ID/IDR 结账）；留空则直连",
+    },
+    {
+        "key": "GOPAY_CUSTOM_PAYMENT_METHOD_IDS", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "GoPay自定义支付方式ID(每行一个)", "help": "ID/IDR 自定义结账里 GoPay 只出现在 custom_payment_methods(cpmt_*)。留空=出现自定义支付方式即视为支持 GoPay；填已知 cpmt_ id 则精确匹配",
+    },
+    {
+        "key": "GCASH_CUSTOM_PAYMENT_METHOD_IDS", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "GCash自定义支付方式ID(每行一个)", "help": "PH/PHP 自定义结账里 GCash 只出现在 custom_payment_methods(cpmt_*)。留空=出现自定义支付方式即视为支持 GCash；填已知 cpmt_ id 则精确匹配",
+    },
+    {
+        "key": "MOMO_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
+        "label": "支付检测超时(秒)", "help": "所有支付检测（MoMo/GCash/Kakao/PayPal-BR/TH/DE/IDEAL）共用的单次请求超时；有效范围 1-60 秒，超出会自动钳制",
+    },
+    {
+        "key": "MOMO_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "支付检测重试次数", "help": "所有支付检测共用的总尝试次数（含首次）；有效范围 1-6。超时或网络类失败会从对应代理池换代理重试，明确业务结果不重试",
+    },
+    {
+        "key": "MOMO_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "label": "支付检测重试间隔(秒)", "help": "所有支付检测共用的重试等待基准，线性递增：第 1 次重试等 1×间隔、第 2 次等 2×间隔；有效范围 0-30 秒",
+    },
+    {
+        "key": "CHECKOUT_SENTINEL_ENABLED", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "支付检测携带Sentinel令牌", "help": "开启后 checkout 请求携带 OpenAI-Sentinel-Token，避免被风控按 unusual activity 拦截（HTTP 400）。生成依赖 Node.js 18+ 与项目根 jsdom（npm install）；环境缺失或生成失败时自动降级为无令牌请求",
+    },
+
+    # ---- 查试用代理池 ----
+    {
+        "key": "TRIAL_JP_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询JP试用代理池(每行一个)", "help": "查 JP 试用资格专用代理池，必须是 JP 出口；试用资格按出口地区下发，池为空时查 JP 资格会直接报错（不会回退直连）。注册后自动用此池查 JP 资格",
+    },
+    {
+        "key": "TRIAL_GB_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询GB试用代理池(每行一个)", "help": "查 GB 试用资格专用代理池，必须是 GB 出口；池为空时查 GB 资格会直接报错（不会回退直连）",
+    },
+    {
+        "key": "TRIAL_DE_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询DE试用代理池(每行一个)", "help": "查 DE 试用资格专用代理池，必须是 DE 出口；池为空时查 DE 资格会直接报错（不会回退直连）",
+    },
+    {
+        "key": "TRIAL_BR_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询BR试用代理池(每行一个)", "help": "查 BR 试用资格专用代理池，必须是 BR 出口；池为空时查 BR 资格会直接报错（不会回退直连）",
+    },
+    {
+        "key": "TRIAL_TH_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询TH试用代理池(每行一个)", "help": "查 TH 试用资格专用代理池，必须是 TH 出口；池为空时查 TH 资格会直接报错（不会回退直连）",
+    },
+    {
+        "key": "TRIAL_PH_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询PH试用代理池(每行一个)", "help": "查 PH 试用资格专用代理池，必须是 PH 出口；池为空时查 PH 资格会直接报错（不会回退直连）",
+    },
+    {
+        "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },
     {
-        "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "套餐/Agent专用代理", "help": "用于查套餐和生成 Agent Token；留空时 auto/proxy 从代理池选择。可能包含认证信息，仅保存到 .env",
-        "storage": "env", "secret": True,
+        "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
+        "label": "套餐/Agent专用代理", "help": "用于查套餐和生成 Agent Token；支持 socks5/socks5h 完整 URL，或 host:port:user:pass 自动补 socks5h://。留空时 auto/proxy 从代理池选择。可能包含认证信息，仅保存到 .env",
+        "storage": "env",
     },
     {
-        "key": "PLAN_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "套餐/Agent 网络",
         "label": "套餐/Agent超时(秒)", "help": "查套餐和生成 Agent Token 的单次请求超时，建议 10-20 秒；独立于注册请求超时",
     },
     {
-        "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "套餐/Agent 网络",
         "label": "套餐/Agent最大尝试次数", "help": "查套餐和生成 Agent Token 遇到网络错误、429、5xx 等临时错误时的重试次数，建议 2 次",
     },
     {
-        "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "套餐/Agent 网络",
         "label": "套餐/Agent重试间隔(秒)", "help": "查套餐和生成 Agent Token 的重试间隔，按尝试次数递增；服务端 Retry-After 优先",
     },
     {
-        "key": "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "file": "proxy.py", "type": "float", "group": "套餐/Agent 网络",
         "label": "新账号资格复查延迟(秒)", "help": "新注册 free 账号未发现试用资格或首次查询失败时复查一次；0 表示关闭",
     },
     {
-        "key": "PLAN_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "套餐/Agent 网络",
         "label": "套餐查询并发数", "help": "自动、手动和批量查套餐共用；Agent Token 生成使用独立队列；建议 2-4 个线程",
     },
     {
-        "key": "PLAN_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "套餐/Agent 网络",
         "label": "套餐查询队列上限", "help": "防止异常批量操作无限堆积，建议 100-1000",
     },
     {
-        "key": "PLAN_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "套餐/Agent 网络",
         "label": "套餐/Agent请求最小间隔(秒)", "help": "限制查套餐和生成 Agent Token 的请求启动频率，降低 429 风险",
     },
     {
-        "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "套餐/Agent 网络",
         "label": "套餐/Agent请求随机抖动(秒)", "help": "在查套餐和生成 Agent Token 的最小间隔上增加随机延迟，避免请求过于规律",
+    },
+    {
+        "key": "TRIAL_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "查试用代理池",
+        "label": "资格查询并发数", "help": "六地区资格查询共用的后台线程数，建议 1-4",
+    },
+    {
+        "key": "TRIAL_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "查试用代理池",
+        "label": "资格查询队列上限", "help": "六地区资格查询共用的等待队列上限，防止批量任务无限堆积",
+    },
+    {
+        "key": "TRIAL_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "查试用代理池",
+        "label": "资格请求最小间隔(秒)", "help": "限制六地区资格查询的请求启动频率，降低 429 风险",
+    },
+    {
+        "key": "TRIAL_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "查试用代理池",
+        "label": "资格请求随机抖动(秒)", "help": "在资格查询最小间隔上增加随机等待，避免请求过于规律",
     },
     # ---- 提链 ----
     {
@@ -906,7 +1031,7 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def _format_env_value(value, vtype: str) -> str:
+def _format_env_value(value, vtype: str, key: str = "") -> str:
     """把前端值格式化成适合写入 .env 的字符串。"""
     if vtype == "bool":
         if isinstance(value, str):
@@ -918,9 +1043,21 @@ def _format_env_value(value, vtype: str) -> str:
         return repr(float(value))
     if vtype == "list_str_multiline":
         lines = _normalize_config_value(value, vtype)
+        # 代理池字段：保存时自动归一化每行（补 socks5h://、重排认证），
+        # 这样用户填 host:port:user:pass 或 user:pass@host:port 都能正确生效。
+        if key in ("PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL"):
+            from config.proxy import normalize_proxy
+            normalized = [normalize_proxy(line) for line in lines]
+            lines = [n for n in normalized if n]
         return "\n".join(lines) if lines else "[]"
     if vtype == "str":
-        return _normalize_config_value(value, vtype)
+        s = _normalize_config_value(value, vtype)
+        # 套餐/Agent 专用代理：保存时自动归一化（补 socks5h://、重排认证），
+        # 支持 host:port:user:pass 或 user:pass@host:port 格式。
+        if key == "PLAN_CHECK_PROXY":
+            from config.proxy import normalize_proxy
+            s = normalize_proxy(s)
+        return s
     return "" if value is None else str(value)
 
 
@@ -928,7 +1065,7 @@ def update_config(updates: dict) -> dict:
     """批量更新配置。所有 WebUI 可编辑项只写项目根 `.env`。"""
     from config.env_loader import write_env_values, load_env
 
-    updated, ignored = [], []
+    updated, ignored, failed = [], [], []
     env_updates: dict[str, str] = {}
 
     for key, value in updates.items():
@@ -936,7 +1073,13 @@ def update_config(updates: dict) -> dict:
         if field is None:
             ignored.append(key)
             continue
-        env_updates[key] = _format_env_value(value, field["type"])
+        try:
+            env_updates[key] = _format_env_value(value, field["type"], key)
+        except Exception:
+            # 单个字段值非法（如前端传 null/NaN）不应让整次保存 500，跳过并上报。
+            logger.exception("配置字段格式化失败，已跳过: %s=%r", key, value)
+            failed.append(key)
+            continue
         updated.append(key)
 
 
@@ -944,4 +1087,4 @@ def update_config(updates: dict) -> dict:
     if env_updated:
         load_env(override=True)
 
-    return {"updated": updated, "ignored": ignored, "env_updated": env_updated}
+    return {"updated": updated, "ignored": ignored, "failed": failed, "env_updated": env_updated}
