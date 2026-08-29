@@ -81,6 +81,8 @@ def _run_account_paypal_check(
         if proxy is None:
             proxy = pick_paypal_proxy(region)
 
+        # 预写本次使用的代理，前端"检测中"即可悬浮看到线路。
+        db.update_account_check_route(account_id, "paypal", proxy)
         _wait_for_rate_slot()
         result = check_account_paypal(access_token, proxy=proxy, region=region)
 

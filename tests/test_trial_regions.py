@@ -22,7 +22,7 @@ from webui.app import _compact_account_for_list, create_app
 
 class TrialRegionRegistryTests(unittest.TestCase):
     def test_registry_contains_all_supported_regions(self):
-        self.assertEqual(TRIAL_REGIONS, ("jp", "gb", "de", "br", "th", "ph"))
+        self.assertEqual(TRIAL_REGIONS, ("jp", "gb", "de", "br", "th", "ph", "id"))
         self.assertEqual(
             TRIAL_PROXY_POOL_NAMES,
             {region: f"TRIAL_{region.upper()}_PROXY_POOL" for region in TRIAL_REGIONS},

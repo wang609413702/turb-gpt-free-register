@@ -566,30 +566,25 @@ def run_registration(
     except Exception as e:
         logger.error(f"[失败] {email}: {type(e).__name__}: {e}")
         logger.debug("详细错误信息:", exc_info=True)
-        # 邮箱状态回收策略，三种情况：
+        # 邮箱状态回收策略，四种情况：
         #   1. 账号已废（account_deactivated 等）：邮箱素材本身不可用，标 failed 直接剔除。
         #   2. 创建接口通过后失败：远端已消耗这个邮箱，直接废弃，避免重复注册。
-        #   3. 创建接口通过前的普通失败：邮箱还可以下次继续尝试，放回 available。
+        #   3. 邮箱始终收不到 OTP（OpenAI 拒投）：标 failed 剔除，避免毒化后续任务。
+        #   4. 创建接口通过前的普通失败：邮箱还可以下次继续尝试，放回 available。
         from core.openai_auth import AccountUnusableError
         account_dead = isinstance(e, AccountUnusableError)
         try:
             if email:
-                from core.email_provider import release_email
-                if account_dead:
-                    src = release_email(
-                        email, status="failed",
-                        note="账号已被删除/停用，邮箱不可用",
-                    )
-                    logger.warning(f"[邮箱:{src}] {email} 账号已被删除/停用，标记为 failed，不再重新注册")
-                elif create_acknowledged:
-                    src = release_email(
-                        email, status="failed",
-                        note=f"创建接口已通过但后续失败，已废弃: {str(e)[:180]}",
-                    )
-                    logger.warning(f"[邮箱:{src}] {email} 已创建但后续失败，标记为 failed，不再重新注册")
-                else:
-                    src = release_email(email, status="available", note=f"上次失败: {str(e)[:180]}")
-                    logger.info(f"[邮箱:{src}] {email} 已恢复 available")
+                from core.email_provider import release_email_after_registration_failure
+                src = release_email_after_registration_failure(
+                    email,
+                    e,
+                    create_acknowledged=create_acknowledged,
+                    account_dead=account_dead,
+                    label="协议注册失败",
+                )
+                if src:
+                    logger.info(f"[邮箱:{src}] {email} 已按失败类型回收")
         except Exception:
             pass
         return {"success": False, "email": email, "error": str(e)}

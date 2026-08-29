@@ -10,7 +10,7 @@ import socket
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from config.trial import TRIAL_PROXY_POOL_NAMES, TRIAL_REGIONS, trial_timezone_offset_min
 from core.session import BrowserSession
@@ -77,6 +77,26 @@ def _local_proxy_status(proxy: str) -> tuple[bool, bool, str | None]:
         return False, False, f"代理地址解析失败（{type(exc).__name__}）"
 
 
+def proxy_username(proxy: Optional[str]) -> str:
+    """提取代理的用户名（不含密码），用于检测结果对账用的是哪条线路。"""
+    value = str(proxy or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value if "://" in value else f"//{value}")
+        username = unquote(parsed.username or "")
+        if username:
+            return username
+    except Exception:
+        pass
+    # 兼容历史裸 host:port:user:pass 格式
+    if "://" not in value:
+        parts = value.split(":")
+        if len(parts) >= 4 and parts[2]:
+            return parts[2]
+    return ""
+
+
 def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
     """解析套餐查询的实际网络路径。
 
@@ -89,6 +109,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": "request",
             "network_route": "proxy" if selected else "direct",
             "proxy_used": _mask_proxy(selected) or None,
+            "proxy_username": proxy_username(selected) or None,
             "proxy_fallback_reason": None,
         }
 
@@ -103,6 +124,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct",
             "proxy_used": None,
+            "proxy_username": None,
             "proxy_fallback_reason": None,
         }
 
@@ -125,6 +147,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct",
             "proxy_used": None,
+            "proxy_username": None,
             "proxy_fallback_reason": "未配置套餐查询代理或代理池",
         }
 
@@ -135,6 +158,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct_fallback",
             "proxy_used": _mask_proxy(selected),
+            "proxy_username": None,
             "proxy_fallback_reason": reason,
         }
     return {
@@ -142,6 +166,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         "proxy_mode": mode,
         "network_route": "proxy",
         "proxy_used": _mask_proxy(selected),
+        "proxy_username": proxy_username(selected) or None,
         "proxy_fallback_reason": None,
     }
 
@@ -843,6 +868,7 @@ def resolve_trial_check_route(region: str, explicit_proxy: Optional[str] = None)
             "proxy": selected,
             "proxy_source": "request",
             "proxy_used": _mask_proxy(selected) or None,
+            "proxy_username": proxy_username(selected) or None,
         }
 
     from config import proxy as proxy_cfg
@@ -855,6 +881,7 @@ def resolve_trial_check_route(region: str, explicit_proxy: Optional[str] = None)
         "proxy": selected,
         "proxy_source": "trial_pool",
         "proxy_used": _mask_proxy(selected),
+        "proxy_username": proxy_username(selected) or None,
     }
 
 

@@ -1016,6 +1016,7 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_proxy_mode"] = result.get("proxy_mode")
         row["plan_check_network_route"] = result.get("network_route")
         row["plan_check_proxy_used"] = result.get("proxy_used")
+        row["plan_check_proxy_username"] = result.get("proxy_username")
         row["plan_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         row["token_expired"] = result.get("token_expired")
         row["token_expires_at"] = result.get("token_expires_at")
@@ -1139,6 +1140,7 @@ def update_account_trial_check(
             row[f"{prefix}_last_success_at"] = result.get("checked_at") or _now()
 
         row["trial_check_proxy_used"] = result.get("proxy_used")
+        row["trial_check_proxy_username"] = result.get("proxy_username")
         row["trial_check_proxy_source"] = result.get("proxy_source")
         row["trial_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = _now()
@@ -1340,11 +1342,13 @@ def update_account_momo_check(acc_id: int | None = None, email: str | None = Non
             row["momo_stripe_mode"] = result.get("stripe_mode")
             row["momo_checkout_provider"] = result.get("checkout_provider")
             row["momo_session_kind"] = result.get("session_kind")
+            row["momo_promo_granted"] = result.get("promo_granted")
             row["momo_last_success_at"] = result.get("checked_at") or _now()
 
         row["momo_check_proxy_mode"] = result.get("proxy_mode")
         row["momo_check_network_route"] = result.get("network_route")
         row["momo_check_proxy_used"] = result.get("proxy_used")
+        row["momo_check_proxy_username"] = result.get("proxy_username")
         row["momo_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         if result.get("exit_ip") or result.get("exit_country"):
             row["momo_exit_ip"] = result.get("exit_ip")
@@ -1388,16 +1392,39 @@ def update_account_gcash_check(acc_id: int | None = None, email: str | None = No
             row["gcash_stripe_mode"] = result.get("stripe_mode")
             row["gcash_checkout_provider"] = result.get("checkout_provider")
             row["gcash_session_kind"] = result.get("session_kind")
+            row["gcash_promo_granted"] = result.get("promo_granted")
             row["gcash_last_success_at"] = result.get("checked_at") or _now()
 
         row["gcash_check_proxy_mode"] = result.get("proxy_mode")
         row["gcash_check_network_route"] = result.get("network_route")
         row["gcash_check_proxy_used"] = result.get("proxy_used")
+        row["gcash_check_proxy_username"] = result.get("proxy_username")
         row["gcash_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         if result.get("exit_ip") or result.get("exit_country"):
             row["gcash_exit_ip"] = result.get("exit_ip")
             row["gcash_exit_country"] = result.get("exit_country")
         row["gcash_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_check_route(acc_id: int, prefix: str, proxy: str | None) -> bool:
+    """检测启动时预写本次使用的代理（掩码 + 用户名），让前端"检测中"即可看到线路。
+
+    prefix 为检测类型（gcash/momo/paypal/kakao/ideal/gopay），检测完成后的
+    update_account_*_check 会用正式结果覆盖这里的预写值。
+    """
+    if not acc_id:
+        return False
+    from core.chatgpt_plan import _mask_proxy, proxy_username
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row[f"{prefix}_check_proxy_used"] = _mask_proxy(proxy) or None
+        row[f"{prefix}_check_proxy_username"] = proxy_username(proxy) or None
         row["updated_at"] = _now()
         _save_accounts(accounts, sync_artifacts=False)
         return True
@@ -1545,11 +1572,13 @@ def update_account_kakao_check(acc_id: int | None = None, email: str | None = No
             row["kakao_stripe_mode"] = result.get("stripe_mode")
             row["kakao_checkout_provider"] = result.get("checkout_provider")
             row["kakao_session_kind"] = result.get("session_kind")
+            row["kakao_promo_granted"] = result.get("promo_granted")
             row["kakao_last_success_at"] = result.get("checked_at") or _now()
 
         row["kakao_check_proxy_mode"] = result.get("proxy_mode")
         row["kakao_check_network_route"] = result.get("network_route")
         row["kakao_check_proxy_used"] = result.get("proxy_used")
+        row["kakao_check_proxy_username"] = result.get("proxy_username")
         row["kakao_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         if result.get("exit_ip") or result.get("exit_country"):
             row["kakao_exit_ip"] = result.get("exit_ip")
@@ -1687,11 +1716,13 @@ def update_account_paypal_check(acc_id: int | None = None, email: str | None = N
             row["paypal_stripe_mode"] = result.get("stripe_mode")
             row["paypal_checkout_provider"] = result.get("checkout_provider")
             row["paypal_session_kind"] = result.get("session_kind")
+            row["paypal_promo_granted"] = result.get("promo_granted")
             row["paypal_last_success_at"] = result.get("checked_at") or _now()
 
         row["paypal_check_proxy_mode"] = result.get("proxy_mode")
         row["paypal_check_network_route"] = result.get("network_route")
         row["paypal_check_proxy_used"] = result.get("proxy_used")
+        row["paypal_check_proxy_username"] = result.get("proxy_username")
         row["paypal_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         if result.get("exit_ip") or result.get("exit_country"):
             row["paypal_exit_ip"] = result.get("exit_ip")
@@ -1824,6 +1855,7 @@ def update_account_ideal_check(acc_id: int | None = None, email: str | None = No
             row["ideal_stripe_mode"] = result.get("stripe_mode")
             row["ideal_checkout_provider"] = result.get("checkout_provider")
             row["ideal_session_kind"] = result.get("session_kind")
+            row["ideal_promo_granted"] = result.get("promo_granted")
             row["ideal_last_success_at"] = result.get("checked_at") or _now()
 
         if result.get("exit_ip") or result.get("exit_country"):
@@ -1832,6 +1864,7 @@ def update_account_ideal_check(acc_id: int | None = None, email: str | None = No
         row["ideal_check_proxy_mode"] = result.get("proxy_mode")
         row["ideal_check_network_route"] = result.get("network_route")
         row["ideal_check_proxy_used"] = result.get("proxy_used")
+        row["ideal_check_proxy_username"] = result.get("proxy_username")
         row["ideal_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         row["ideal_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = _now()
@@ -1961,6 +1994,7 @@ def update_account_gopay_check(acc_id: int | None = None, email: str | None = No
             row["gopay_stripe_mode"] = result.get("stripe_mode")
             row["gopay_checkout_provider"] = result.get("checkout_provider")
             row["gopay_session_kind"] = result.get("session_kind")
+            row["gopay_promo_granted"] = result.get("promo_granted")
             row["gopay_last_success_at"] = result.get("checked_at") or _now()
 
         if result.get("exit_ip") or result.get("exit_country"):
@@ -1969,6 +2003,7 @@ def update_account_gopay_check(acc_id: int | None = None, email: str | None = No
         row["gopay_check_proxy_mode"] = result.get("proxy_mode")
         row["gopay_check_network_route"] = result.get("network_route")
         row["gopay_check_proxy_used"] = result.get("proxy_used")
+        row["gopay_check_proxy_username"] = result.get("proxy_username")
         row["gopay_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
         row["gopay_check_result_json"] = json.dumps(result, ensure_ascii=False)
         row["updated_at"] = _now()
@@ -2231,8 +2266,9 @@ def list_account_plan_check_statuses(
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
-        "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
-        "live_check_device_id", "live_check_proxy_used", "live_check_fingerprint_text",
+        "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_username",
+        "plan_check_proxy_fallback_reason",
+        "live_check_device_id", "live_check_proxy_used", "live_check_proxy_username", "live_check_fingerprint_text",
         "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
@@ -2240,7 +2276,7 @@ def list_account_plan_check_statuses(
         "trial_check_status", "trial_check_ok", "trial_check_error",
         "trial_check_trigger", "trial_check_region", "trial_check_queued_at",
         "trial_check_started_at", "trial_check_completed_at",
-        "trial_checked_at", "trial_check_proxy_used",
+        "trial_checked_at", "trial_check_proxy_used", "trial_check_proxy_username",
         *tuple(
             f"{TRIAL_REGION_FIELD_PREFIXES[region]}_{suffix}"
             for region in TRIAL_REGIONS
@@ -2259,50 +2295,56 @@ def list_account_plan_check_statuses(
         "momo_check_status", "momo_ok", "momo_has_momo", "momo_decision",
         "momo_decision_text", "momo_supported", "momo_conclusive",
         "momo_methods", "momo_stripe_mode", "momo_checkout_provider", "momo_session_kind",
+        "momo_promo_granted",
         "momo_check_error", "momo_check_trigger", "momo_check_queued_at",
         "momo_check_started_at", "momo_check_completed_at",
         "momo_checked_at", "momo_last_success_at",
-        "momo_exit_ip", "momo_exit_country",
+        "momo_exit_ip", "momo_exit_country", "momo_check_proxy_username",
         # GCash 检测
         "gcash_check_status", "gcash_ok", "gcash_has_gcash", "gcash_decision",
         "gcash_decision_text", "gcash_supported", "gcash_conclusive",
         "gcash_methods", "gcash_stripe_mode", "gcash_checkout_provider", "gcash_session_kind",
+        "gcash_promo_granted",
         "gcash_check_error", "gcash_check_trigger", "gcash_check_queued_at",
         "gcash_check_started_at", "gcash_check_completed_at",
         "gcash_checked_at", "gcash_last_success_at",
-        "gcash_exit_ip", "gcash_exit_country",
+        "gcash_exit_ip", "gcash_exit_country", "gcash_check_proxy_username",
         # Kakao 检测
         "kakao_check_status", "kakao_ok", "kakao_has_kakao", "kakao_decision",
         "kakao_decision_text", "kakao_supported", "kakao_conclusive",
         "kakao_methods", "kakao_stripe_mode", "kakao_checkout_provider", "kakao_session_kind",
+        "kakao_promo_granted",
         "kakao_check_error", "kakao_check_trigger", "kakao_check_queued_at",
         "kakao_check_started_at", "kakao_check_completed_at",
         "kakao_checked_at", "kakao_last_success_at",
-        "kakao_exit_ip", "kakao_exit_country",
+        "kakao_exit_ip", "kakao_exit_country", "kakao_check_proxy_username",
         # PayPal 检测
         "paypal_check_status", "paypal_ok", "paypal_has_paypal", "paypal_decision",
         "paypal_decision_text", "paypal_supported", "paypal_conclusive",
         "paypal_methods", "paypal_stripe_mode", "paypal_checkout_provider", "paypal_session_kind",
+        "paypal_promo_granted",
         "paypal_check_error", "paypal_check_trigger", "paypal_check_queued_at",
         "paypal_check_started_at", "paypal_check_completed_at",
         "paypal_checked_at", "paypal_last_success_at",
-        "paypal_exit_ip", "paypal_exit_country", "paypal_check_region",
+        "paypal_exit_ip", "paypal_exit_country", "paypal_check_region", "paypal_check_proxy_username",
         # IDEAL 检测
         "ideal_check_status", "ideal_ok", "ideal_has_ideal", "ideal_decision",
         "ideal_decision_text", "ideal_supported", "ideal_conclusive",
         "ideal_methods", "ideal_stripe_mode", "ideal_checkout_provider", "ideal_session_kind",
+        "ideal_promo_granted",
         "ideal_check_error", "ideal_check_trigger", "ideal_check_queued_at",
         "ideal_check_started_at", "ideal_check_completed_at",
         "ideal_checked_at", "ideal_last_success_at",
-        "ideal_exit_ip", "ideal_exit_country",
+        "ideal_exit_ip", "ideal_exit_country", "ideal_check_proxy_username",
         # GoPay 检测
         "gopay_check_status", "gopay_ok", "gopay_has_gopay", "gopay_decision",
         "gopay_decision_text", "gopay_supported", "gopay_conclusive",
         "gopay_methods", "gopay_stripe_mode", "gopay_checkout_provider", "gopay_session_kind",
+        "gopay_promo_granted",
         "gopay_check_error", "gopay_check_trigger", "gopay_check_queued_at",
         "gopay_check_started_at", "gopay_check_completed_at",
         "gopay_checked_at", "gopay_last_success_at",
-        "gopay_exit_ip", "gopay_exit_country",
+        "gopay_exit_ip", "gopay_exit_country", "gopay_check_proxy_username",
         "momo_check_network_route", "momo_check_proxy_used",
     )
     with _LOCK:
@@ -2444,6 +2486,24 @@ def update_account_note(acc_id: int, note: str) -> bool:
         return True
 
 
+def update_account_access_token(acc_id: int, token: str) -> bool:
+    """手动替换账号 access_token。token 为空字符串时表示清空。
+
+    走全量同步，保证 注册成功的token.txt / copy_line / 静态查看页一起刷新。
+    """
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        now = _now()
+        row["access_token"] = str(token or "").strip()
+        row["token_updated_at"] = now
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
 def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
     """写回账号查活结果；成功时同步刷新最新 access_token 和账号基础信息。"""
     result = result or {}
@@ -2481,6 +2541,7 @@ def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
                 row["device_id"] = result.get("device_id")
             row["live_check_device_id"] = result.get("device_id") or row.get("live_check_device_id")
             row["live_check_proxy_used"] = result.get("proxy_used") or row.get("live_check_proxy_used")
+            row["live_check_proxy_username"] = result.get("proxy_username") or row.get("live_check_proxy_username")
             row["live_check_fingerprint_text"] = result.get("fingerprint_text") or row.get("live_check_fingerprint_text")
             if result.get("fingerprint"):
                 row["live_check_fingerprint"] = result.get("fingerprint")

@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-TRIAL_REGIONS = ("jp", "gb", "de", "br", "th", "ph")
+TRIAL_REGIONS = ("jp", "gb", "de", "br", "th", "ph", "id")
 
 TRIAL_PROXY_POOL_NAMES = {
     region: f"TRIAL_{region.upper()}_PROXY_POOL"
@@ -17,6 +17,7 @@ TRIAL_REGION_TIMEZONES = {
     "br": "America/Sao_Paulo",
     "th": "Asia/Bangkok",
     "ph": "Asia/Manila",
+    "id": "Asia/Jakarta",
 }
 
 TRIAL_REGION_FIELD_PREFIXES = {

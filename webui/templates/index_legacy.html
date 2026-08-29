@@ -498,6 +498,7 @@
             <button class="btn primary" data-trial-bulk-region="br" disabled title="使用查询BR试用代理池批量查询资格">查BR</button>
             <button class="btn primary" data-trial-bulk-region="th" disabled title="使用查询TH试用代理池批量查询资格">查TH</button>
             <button class="btn primary" data-trial-bulk-region="ph" disabled title="使用查询PH试用代理池批量查询资格">查PH</button>
+            <button class="btn primary" data-trial-bulk-region="id" disabled title="使用查询ID试用代理池批量查询资格">查ID</button>
             <button class="btn good" id="btnExtractSelectedLinks" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
           </div>
           <div class="btn-group">
@@ -1318,7 +1319,7 @@ function _codexAgentCell(r) {
   return gen ? `<div class="agent-token-cell">${gen}</div>` : '<span class="muted">-</span>';
 }
 function _isTrialEligible(account) {
-  const values = ['jp','gb','de','br','th','ph'].map(region => account[`trial_${region}_eligible`]);
+  const values = ['jp','gb','de','br','th','ph','id'].map(region => account[`trial_${region}_eligible`]);
   if (values.some(value => value === true)) return true;
   if (values.some(value => value === false)) return false;
   return account.plus_trial_eligible === true;
@@ -1336,7 +1337,7 @@ function _trialRegionPill(r, region) {
   return `<span class="pill status-success" title="${esc([stamp && `查询: ${stamp}`, campaignId && `活动ID: ${campaignId}`, title && `活动: ${title}`].filter(Boolean).join('；'))}">${region.toUpperCase()}</span>`;
 }
 function _trialCell(r) {
-  const pills = ['jp','gb','de','br','th','ph'].map(region => _trialRegionPill(r, region)).filter(Boolean);
+  const pills = ['jp','gb','de','br','th','ph','id'].map(region => _trialRegionPill(r, region)).filter(Boolean);
   const status = r.trial_check_status || '';
   if (['queued','running'].includes(status)) {
     const region = (r.trial_check_region || '').toUpperCase();
@@ -1352,7 +1353,7 @@ function _trialCell(r) {
 }
 function _trialAction(r) {
   if (['queued','running'].includes(r.trial_check_status)) return '<button disabled>资格查询中…</button>';
-  return ['jp','gb','de','br','th','ph'].map(region => {
+  return ['jp','gb','de','br','th','ph','id'].map(region => {
     const label = region.toUpperCase();
     return `<button data-trial-check="${esc(r.id)}" data-trial-region="${region}" title="使用查询${label}试用代理池">${label}</button>`;
   }).join(' ');
@@ -2009,7 +2010,7 @@ async function checkOnePlan(id, btn) {
 }
 
 async function checkOneTrial(id, btn, region = 'jp') {
-  const regionCode = ['jp','gb','de','br','th','ph'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
+  const regionCode = ['jp','gb','de','br','th','ph','id'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
   const label = regionCode.toUpperCase();
   const old = btn.textContent;
   btn.disabled = true;
@@ -2284,7 +2285,7 @@ async function checkSelectedPlans() {
 async function checkSelectedTrials(region = 'jp', btn = null) {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const regionCode = ['jp','gb','de','br','th','ph'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
+  const regionCode = ['jp','gb','de','br','th','ph','id'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
   const label = regionCode.toUpperCase();
   const old = btn ? btn.textContent : '';
   if (btn) {

@@ -206,6 +206,79 @@ def release_email(email: str, status: str = "available", note: str | None = None
     return source
 
 
+# 各邮箱来源的取码异常类型名。只在命中“收不到验证码”文案时才视为邮箱被拒投。
+_MAIL_TIMEOUT_ERROR_NAMES = {
+    "GenericApiMailError",
+    "OutlookClientError",
+    "CFTempMailError",
+    "GPTMailError",
+    "MailNestClientError",
+    "CloudMailError",
+    "QQMailError",
+}
+
+_MAIL_TIMEOUT_MARKERS = (
+    "验证码超时",
+    "暂未收到验证码",
+    "no_code",
+    "未提取到 6 位验证码",
+    "未提取到6位验证码",
+    "OTP 超时",
+    "OTP超时",
+)
+
+
+def is_otp_delivery_timeout(exc: BaseException) -> bool:
+    """判断异常是否为「验证码始终未送达」（邮箱侧收不到 OpenAI 邮件）。
+
+    任务内部已做多轮取码+重发等待仍超时，说明 OpenAI 对该地址拒投；
+    把这种邮箱放回 available 会被后续任务反复领到，形成毒化循环
+    （同一邮箱连刷十几小时全部收不到码）。
+    """
+    if type(exc).__name__ not in _MAIL_TIMEOUT_ERROR_NAMES:
+        return False
+    text = str(exc)
+    return any(marker in text for marker in _MAIL_TIMEOUT_MARKERS)
+
+
+def release_email_after_registration_failure(
+    email: str,
+    exc: BaseException,
+    *,
+    create_acknowledged: bool,
+    account_dead: bool = False,
+    label: str = "注册失败",
+) -> str:
+    """注册失败后的统一邮箱回收，返回来源名。
+
+    - 账号已废 → failed（OpenAI 删除/停用，邮箱不可用）
+    - 已确认创建后失败 → failed（远端已消耗）
+    - 邮箱收不到 OpenAI 验证码（OTP 超时类异常）→ failed，剔除不回池
+    - 其他失败 → available，下次可重试
+    """
+    if not (email or "").strip():
+        return ""
+    if account_dead:
+        src = release_email(email, status="failed", note="账号已被删除/停用，邮箱不可用")
+        logger.warning("[EmailProvider] %s 账号已废，标记 failed: %s", email, src)
+        return src
+    if create_acknowledged:
+        src = release_email(email, status="failed", note=f"{label}（创建已确认）: {str(exc)[:160]}")
+        logger.warning("[EmailProvider] %s 创建后失败，标记 failed: %s", email, src)
+        return src
+    if is_otp_delivery_timeout(exc):
+        src = release_email(
+            email,
+            status="failed",
+            note=f"该邮箱收不到 OpenAI 验证码，已剔除: {str(exc)[:140]}",
+        )
+        logger.warning("[EmailProvider] %s OTP 始终未送达，标记 failed 不再回池: %s", email, src)
+        return src
+    src = release_email(email, status="available", note=f"{label}可重试: {str(exc)[:140]}")
+    logger.info("[EmailProvider] %s 已恢复 available: %s", email, src)
+    return src
+
+
 def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
     """回收仍停留在 used 的任务领取，且绝不覆盖已注册/已判废状态。"""
     if not (email or "").strip():

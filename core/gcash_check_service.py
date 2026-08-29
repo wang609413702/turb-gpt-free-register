@@ -74,6 +74,8 @@ def _run_account_gcash_check(
         if proxy is None:
             proxy = pick_gcash_proxy()
 
+        # 预写本次使用的代理，前端"检测中"即可悬浮看到线路。
+        db.update_account_check_route(account_id, "gcash", proxy)
         _wait_for_rate_slot()
         result = check_account_gcash(access_token, proxy=proxy)
 

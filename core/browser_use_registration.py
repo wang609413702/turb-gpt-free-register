@@ -2654,11 +2654,12 @@ def run_browser_use_registration(
         logger.error("[BrowserUse] 注册失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[BrowserUse] 失败详情", exc_info=True)
         try:
-            from core.email_provider import release_email
-            release_email(
+            from core.email_provider import release_email_after_registration_failure
+            release_email_after_registration_failure(
                 email,
-                status="failed" if create_acknowledged else "available",
-                note=f"BrowserUse注册失败: {str(exc)[:180]}",
+                exc,
+                create_acknowledged=create_acknowledged,
+                label="BrowserUse注册失败",
             )
         except Exception:
             pass

@@ -586,6 +586,18 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "账号不存在"}), 404
         return jsonify({"ok": True, "updated": True, "id": acc_id, "note": note})
 
+    @app.post("/api/accounts/<int:acc_id>/token")
+    def api_account_token(acc_id: int):
+        """手动替换单账号 access_token。Body {token: "..."}，空字符串表示清空。"""
+        data = request.get_json(silent=True) or {}
+        token = str(data.get("token") or "").strip()
+        if len(token) > 8192:
+            return jsonify({"ok": False, "error": "Token 最长 8192 个字符"}), 400
+        updated = db.update_account_access_token(acc_id=acc_id, token=token)
+        if not updated:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        return jsonify({"ok": True, "updated": True, "id": acc_id})
+
     @app.post("/api/accounts/note-bulk")
     def api_accounts_note_bulk():
         """批量更新已注册账号备注。Body {account_ids: [...], note: "..."}，空字符串表示清空。"""
@@ -795,7 +807,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/check-trial")
     def api_account_check_trial():
-        """把单账号地区试用资格查询加入后台队列。Body {account_id|email, region: jp|gb|de|br|th|ph, proxy?, timezone_offset_min?}"""
+        """把单账号地区试用资格查询加入后台队列。Body {account_id|email, region: jp|gb|de|br|th|ph|id, proxy?, timezone_offset_min?}"""
         data = request.get_json(silent=True) or {}
         acc_id = data.get("account_id") or data.get("id")
         email = (data.get("email") or "").strip()
@@ -838,7 +850,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/check-trial-bulk")
     def api_accounts_check_trial_bulk():
-        """批量把地区试用资格查询加入统一后台队列。Body {account_ids:[...], region: jp|gb|de|br|th|ph, proxy?, timezone_offset_min?}"""
+        """批量把地区试用资格查询加入统一后台队列。Body {account_ids:[...], region: jp|gb|de|br|th|ph|id, proxy?, timezone_offset_min?}"""
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
         region = str(data.get("region") or "").strip().lower()

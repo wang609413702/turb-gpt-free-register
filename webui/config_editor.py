@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
-EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL"}
+EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL"}
 
 
 # ============================================================
@@ -566,6 +566,10 @@ EDITABLE_FIELDS = [
         "label": "查询PH试用代理池(每行一个)", "help": "查 PH 试用资格专用代理池，必须是 PH 出口；池为空时查 PH 资格会直接报错（不会回退直连）",
     },
     {
+        "key": "TRIAL_ID_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询ID试用代理池(每行一个)", "help": "查 ID（印尼）试用资格专用代理池，必须是 ID 出口；池为空时查 ID 资格会直接报错（不会回退直连）",
+    },
+    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },
@@ -1049,7 +1053,7 @@ def _format_env_value(value, vtype: str, key: str = "") -> str:
         lines = _normalize_config_value(value, vtype)
         # 代理池字段：保存时自动归一化每行（补 socks5h://、重排认证），
         # 这样用户填 host:port:user:pass 或 user:pass@host:port 都能正确生效。
-        if key in ("PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL"):
+        if key in ("PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL"):
             from config.proxy import normalize_proxy
             normalized = [normalize_proxy(line) for line in lines]
             lines = [n for n in normalized if n]

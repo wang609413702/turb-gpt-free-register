@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
+from core.chatgpt_plan import proxy_username
 from core.openai_auth import (
     follow_authorize,
     send_email_otp,
@@ -210,6 +211,7 @@ def check_account_liveness(email: str, proxy: str | None = None, *, clear_log: b
             "session": session_info,
             "device_id": session.device_id,
             "proxy_used": session.proxy or None,
+            "proxy_username": proxy_username(session.proxy) or None,
             "fingerprint": fp,
             "fingerprint_text": session.fingerprint_summary_text(),
         }

@@ -117,6 +117,22 @@ def checkout_body(country: str = "VN", currency: str = "VND") -> dict[str, Any]:
     }
 
 
+def promo_state(data: dict) -> dict:
+    """从 checkout 响应提取优惠授予状态。
+
+    OpenAI 对同一账号的每次会话独立决定是否授予 plus-1-month-free 等优惠：
+    授予优惠（0 元首月）的会话只配置 card/link，不配置 GCash 等本地支付方式；
+    未授予（原价）的会话才会带上 custom_payment_methods。检测结果必须同时
+    记录优惠状态，否则 not_enabled 会被误读为"账号不支持该支付方式"。
+    """
+    promo = data.get("promo_campaign") if isinstance(data, dict) else None
+    granted = isinstance(promo, dict) and bool(promo.get("promo_campaign_id"))
+    return {
+        "promo_granted": granted,
+        "promo_campaign_id": promo.get("promo_campaign_id") if granted else None,
+    }
+
+
 def extract_methods(payload: dict[str, Any]) -> tuple[list[str] | None, str | None]:
     methods = payload.get("payment_method_types")
     source = "top_level"
@@ -314,6 +330,7 @@ def _run_probe(env: BrowserSession, token: str, timeout_seconds: float,
         return _result_ok_or_fail(ok=False, decision="checkout_failed",
                                    decision_text=DECISION_TEXT["checkout_failed"],
                                    error="checkout 响应不是 JSON 对象")
+    promo = promo_state(data)
 
     checkout_id = data.get("checkout_session_id") or data.get("session_id") or data.get("id")
     checkout_provider = str(data.get("checkout_provider") or "").strip().lower()
@@ -370,6 +387,8 @@ def _run_probe(env: BrowserSession, token: str, timeout_seconds: float,
         else None
     )
     decision_text = DECISION_TEXT.get(decision, decision).format(method=method_label)
+    if decision == "not_enabled" and promo["promo_granted"]:
+        decision_text += "；本次会话被授予 0 元试用优惠，优惠会话不配置本地支付方式"
     return _result_ok_or_fail(
         ok=True,
         decision=decision,
@@ -385,6 +404,8 @@ def _run_probe(env: BrowserSession, token: str, timeout_seconds: float,
             "checkout_provider": checkout_provider or None,
             "checkout_id": str(checkout_id) if checkout_id else None,
             "session_kind": checkout_session_kind(checkout_id, checkout_provider),
+            "promo_granted": promo["promo_granted"],
+            "promo_campaign_id": promo["promo_campaign_id"],
         },
     )
 
