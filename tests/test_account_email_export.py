@@ -39,8 +39,9 @@ class OriginalEmailLineTests(unittest.TestCase):
             self.assertEqual(value_of(_row(), "original_email_line"), "a@b.c----https://code.url/x")
 
     def test_unknown_field_still_rejected(self):
+        # password/totp_secret/totp_code 已是合法导出字段；未知字段仍拒绝。
         with self.assertRaises(ValueError):
-            _account_secret_value(_row(), "password")
+            _account_secret_value(_row(), "no_such_field")
 
 
 class SecretBulkEndpointTests(unittest.TestCase):

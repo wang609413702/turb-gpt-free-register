@@ -693,6 +693,7 @@ def _request_accounts_check(
         }
 
     last_result: dict | None = None
+    account_seed = f"account:{(claims.get('email') or claims.get('account_id') or normalize_token(token)[:32]).lower()}"
     for attempt in range(1, attempts + 1):
         env = None
         resp = None
@@ -702,7 +703,7 @@ def _request_accounts_check(
                 attempt_route = route_provider()
             route_meta = {k: v for k, v in attempt_route.items() if k != "proxy"}
             # 查询只需要稳定的请求头，不需要额外访问 IP 地理信息接口。
-            env = BrowserSession(proxy=attempt_route["proxy"], detect_exit_geo=False)
+            env = BrowserSession(proxy=attempt_route["proxy"], detect_exit_geo=False, fingerprint_seed=account_seed)
             resp = env.get(
                 url,
                 headers=_common_headers(env, token, claims),

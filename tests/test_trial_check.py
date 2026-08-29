@@ -385,7 +385,7 @@ class PlanRetry403Tests(unittest.TestCase):
         picked = iter(["socks5h://jp-one:1080", "socks5h://jp-two:1080"])
         created = []
 
-        def make_session(*, proxy, detect_exit_geo):
+        def make_session(*, proxy, detect_exit_geo, fingerprint_seed=None):
             created.append(proxy)
             return first if len(created) == 1 else second
 
