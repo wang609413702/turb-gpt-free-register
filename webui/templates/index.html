@@ -201,8 +201,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #momoLinkLogPanel, #gcashLinkLogPanel, #gopayLinkLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #momoLinkLogPanel:not(.hidden), #gcashLinkLogPanel:not(.hidden), #gopayLinkLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #rebindLogPanel, #momoLinkLogPanel, #gcashLinkLogPanel, #gopayLinkLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #rebindLogPanel:not(.hidden), #momoLinkLogPanel:not(.hidden), #gcashLinkLogPanel:not(.hidden), #gopayLinkLogPanel:not(.hidden), #qrPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -210,9 +210,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #momoLinkLogPanel h3, #gcashLinkLogPanel h3, #gopayLinkLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #momoLinkLogPanel h3 .btn, #gcashLinkLogPanel h3 .btn, #gopayLinkLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #momoLinkLogPanel .log, #gcashLinkLogPanel .log, #gopayLinkLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #rebindLogPanel h3, #momoLinkLogPanel h3, #gcashLinkLogPanel h3, #gopayLinkLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #rebindLogPanel h3 .btn, #momoLinkLogPanel h3 .btn, #gcashLinkLogPanel h3 .btn, #gopayLinkLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #rebindLogPanel .log, #momoLinkLogPanel .log, #gcashLinkLogPanel .log, #gopayLinkLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -1704,14 +1704,16 @@
     .outlook-table-v2 .acc-v2-more-menu button.danger { color: #e64545; }
     .outlook-panel-v2 .jobs-v2-pager { border-top: 1px solid #ebeef5; }
 
-    /* ---- 邮箱池导入弹窗 / MoMo提链弹窗 / GCash提链弹窗 / GoPay提链弹窗 ---- */
+    /* ---- 邮箱池导入弹窗 / MoMo提链弹窗 / GCash提链弹窗 / GoPay提链弹窗 / 换绑弹窗 ---- */
     #outlookImportModal:not(.hidden),
     #momoLinkAddModal:not(.hidden),
     #momoLinkProxyModal:not(.hidden),
     #gcashLinkAddModal:not(.hidden),
     #gcashLinkProxyModal:not(.hidden),
     #gopayLinkAddModal:not(.hidden),
-    #gopayLinkProxyModal:not(.hidden) {
+    #gopayLinkProxyModal:not(.hidden),
+    #rebindModal:not(.hidden),
+    #rebindImportModal:not(.hidden) {
       position: fixed; inset: 0; z-index: 1200;
       display: flex; align-items: center; justify-content: center;
       padding: 24px; box-sizing: border-box;
@@ -3070,6 +3072,12 @@
       </svg>
       <span class="sidebar-item-label">邮箱池</span>
     </button>
+    <button type="button" data-tab="rebindpool" class="sidebar-item">
+      <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+      </svg>
+      <span class="sidebar-item-label">换绑邮箱池</span>
+    </button>
     <button type="button" data-tab="momolink" class="sidebar-item">
       <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -3310,7 +3318,7 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐（仅套餐，不含试用资格）">查套餐</button>
           <div class="tb-dd" id="trialBulkDd">
-            <button type="button" class="jobs-tb-btn jobs-tb-btn--primary tb-dd-btn" id="btnCheckSelectedTrialsV2" disabled aria-haspopup="true" aria-expanded="false" title="按地区查选中账号的 Plus 试用资格；点击选择地区（JP/GB/DE/BR/TH/PH），地区由查试用代理池出口决定">查资格</button>
+            <button type="button" class="jobs-tb-btn jobs-tb-btn--primary tb-dd-btn" id="btnCheckSelectedTrialsV2" disabled aria-haspopup="true" aria-expanded="false" title="按地区查选中账号的 Plus 试用资格；点击选择地区（JP/GB/DE/BR/TH/PH/VN），地区由查试用代理池出口决定">查资格</button>
             <div class="tb-dd-menu" role="menu">
               <button type="button" data-trial-bulk-region="jp" title="使用 查询JP试用代理池 批量查询选中账号的 Plus 试用资格">查JP</button>
               <button type="button" data-trial-bulk-region="gb" title="使用 查询GB试用代理池 批量查询选中账号的 Plus 试用资格">查GB</button>
@@ -3318,9 +3326,11 @@
               <button type="button" data-trial-bulk-region="br" title="使用 查询BR试用代理池 批量查询选中账号的 Plus 试用资格">查BR</button>
               <button type="button" data-trial-bulk-region="th" title="使用 查询TH试用代理池 批量查询选中账号的 Plus 试用资格">查TH</button>
               <button type="button" data-trial-bulk-region="ph" title="使用 查询PH试用代理池 批量查询选中账号的 Plus 试用资格">查PH</button>
+              <button type="button" data-trial-bulk-region="vn" title="使用 查询VN试用代理池 批量查询选中账号的 Plus 试用资格">查VN</button>
             </div>
           </div>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnRebindSelectedAccountsV2" disabled title="给选中的账号批量换绑邮箱：从换绑邮箱池领取新邮箱，或用 CloudMail 生成新邮箱并取验证码；换绑后自动用新邮箱重新登录刷新 Token">换绑</button>
         </div>
         <div class="acc-v2-btn-group acc-v2-group--agent">
           <span class="acc-v2-btn-group-title">Agent</span>
@@ -3409,6 +3419,12 @@
         <button class="btn" id="btnCloseLiveLog" style="float:right;min-height:28px;">关闭</button>
       </h3>
       <div class="log" id="liveLogContent">加载中…</div>
+    </div>
+    <div class="body hidden" id="rebindLogPanel">
+      <h3>换绑日志：<span id="rebindLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseRebindLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="rebindLogContent">加载中…</div>
     </div>
   </div>
 
@@ -3665,6 +3681,55 @@
     </section>
   </div>
 
+  <!-- ============ 换绑邮箱池 ============ -->
+  <div id="tab-rebindpool" class="hidden">
+    <h1 class="register-title">换绑邮箱池</h1>
+    <section class="outlook-panel-v2" id="rebindPanelV2" aria-label="换绑邮箱池">
+      <div class="outlook-filter-v2" id="rebindFilterV2">
+        <div class="outlook-v2-select" id="rebindSourceV2Wrap">
+          <button type="button" class="outlook-v2-select-btn" id="rebindSourceV2Btn" aria-haspopup="listbox" aria-expanded="false">全部邮箱</button>
+          <div class="outlook-v2-select-menu" role="listbox">
+            <button type="button" class="outlook-v2-select-item is-active" data-value="all" role="option">全部邮箱</button>
+            <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 取码</button>
+            <button type="button" class="outlook-v2-select-item" data-value="cloudmail" role="option">CloudMail</button>
+          </div>
+          <input type="hidden" id="rebindSourceV2" value="all">
+        </div>
+        <div class="acc-v2-btn-group acc-v2-search-wrap">
+          <input id="qRebindV2" type="search" placeholder="搜索邮箱、状态…" autocomplete="off">
+        </div>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnMarkSelectedRebindAvailableV2" disabled title="把选中的邮箱批量标记为未使用/可用">标记未使用</button>
+        <button type="button" class="jobs-tb-btn" id="btnDisableSelectedRebindV2" disabled title="批量停用选中的邮箱；停用后不会被换绑任务领取">停用选中</button>
+        <button type="button" class="jobs-tb-btn" id="btnFailSelectedRebindV2" disabled title="批量标记选中的邮箱为失败">标失败</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedRebindV2" disabled title="批量删除选中的换绑邮箱素材">删除选中</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="copyAllRebindEmailsV2" title="复制当前页全部换绑邮箱素材">复制全部邮箱素材</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportRebindV2" title="导入换绑邮箱素材">导入</button>
+      </div>
+      <div class="outlook-table-v2-wrap">
+        <table class="outlook-table-v2">
+          <colgroup>
+            <col class="col-check"><col class="col-email"><col class="col-source"><col class="col-status">
+            <col class="col-note"><col class="col-time"><col class="col-time"><col class="col-actions">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="rebindSelectAllV2" title="全选/取消全选当前页邮箱" disabled></th>
+              <th class="col-email">邮箱</th>
+              <th class="col-source">类型</th>
+              <th class="col-status">状态</th>
+              <th class="col-note">备注</th>
+              <th class="col-time">导入时间</th>
+              <th class="col-time">已用时间</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="rebindBodyV2"></tbody>
+        </table>
+      </div>
+      <div class="jobs-v2-pager" id="pager-rebind-v2"></div>
+    </section>
+  </div>
+
   <!-- ============ 配置 ============ -->
   <div id="tab-config" class="hidden">
     <div class="config-overview-v2" id="configOverviewV2" aria-label="配置概览">
@@ -3889,6 +3954,72 @@
     </div>
   </div>
 </div>
+<!-- 换绑：选择换绑邮箱来源弹窗 -->
+<div id="rebindModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="rebindModalTitle">
+  <div class="outlook-import-dialog" role="document" style="max-width:520px;">
+    <div class="outlook-import-head">
+      <div class="outlook-import-head-main">
+        <h3 id="rebindModalTitle">选择换绑邮箱来源</h3>
+        <p id="rebindModalDesc">为选中账号更换邮箱：换绑后自动用新邮箱重新登录并刷新 Token</p>
+      </div>
+      <button type="button" class="outlook-import-close" id="btnCloseRebindModal" aria-label="关闭">×</button>
+    </div>
+    <div class="outlook-import-body">
+      <div class="outlook-import-result" id="rebindModalResult"></div>
+      <label class="outlook-import-check" style="align-items:flex-start;gap:10px;cursor:pointer;">
+        <input id="rebindSourcePool" type="radio" name="rebindSource" value="pool" checked style="margin-top:3px;">
+        <span><b>换绑邮箱池</b><br><span style="color:#909399;">从「换绑邮箱池」领取一个可用邮箱作为新邮箱；通用 API 取码邮箱按其取码地址收验证码，CloudMail 邮箱按 CloudMail 收件箱收验证码。</span></span>
+      </label>
+      <label class="outlook-import-check" style="align-items:flex-start;gap:10px;cursor:pointer;margin-top:8px;">
+        <input id="rebindSourceCloudmail" type="radio" name="rebindSource" value="cloudmail" style="margin-top:3px;">
+        <span><b>CloudMail</b><br><span style="color:#909399;">使用当前项目 CloudMail 配置随机生成一个新邮箱，并在其收件箱取换绑验证码和登录验证码。</span></span>
+      </label>
+      <div class="outlook-import-hint" id="rebindModalPoolHint" style="margin-top:8px;"></div>
+    </div>
+    <div class="outlook-import-foot">
+      <button type="button" class="jobs-tb-btn" id="btnCancelRebindModal">取消</button>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitRebindModal">开始换绑</button>
+    </div>
+  </div>
+</div>
+
+<!-- 换绑邮箱池：导入弹窗 -->
+<div id="rebindImportModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="rebindImportTitle">
+  <div class="outlook-import-dialog" role="document">
+    <div class="outlook-import-head">
+      <div class="outlook-import-head-main">
+        <h3 id="rebindImportTitle">导入换绑邮箱素材</h3>
+        <p>通用 API：邮箱----取码地址；CloudMail：每行一个邮箱。换绑时用这些邮箱接收 OpenAI 验证码。</p>
+      </div>
+      <button type="button" class="outlook-import-close" id="btnCloseRebindImport" aria-label="关闭">×</button>
+    </div>
+    <div class="outlook-import-body">
+      <div class="outlook-import-result" id="rebindImportResult"></div>
+      <label class="outlook-import-field">
+        <span>导入类型</span>
+        <div class="outlook-v2-select" id="rebindImportSourceV2Wrap">
+          <button type="button" class="outlook-v2-select-btn" id="rebindImportSourceV2Btn" aria-haspopup="listbox" aria-expanded="false">自动识别</button>
+          <div class="outlook-v2-select-menu" role="listbox">
+            <button type="button" class="outlook-v2-select-item is-active" data-value="" role="option">自动识别</button>
+            <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 取码邮箱</button>
+            <button type="button" class="outlook-v2-select-item" data-value="cloudmail" role="option">CloudMail 邮箱</button>
+          </div>
+          <input type="hidden" id="rebindImportSourceV2" value="">
+        </div>
+        <span class="outlook-import-hint">自动识别：带 ----取码地址 的行按通用 API 导入，其余按 CloudMail 导入</span>
+      </label>
+      <label class="outlook-import-field">
+        <span>换绑邮箱素材</span>
+        <textarea id="rebindImportTextV2" placeholder="通用API: email----取码地址&#10;CloudMail: email（每行一个）"></textarea>
+      </label>
+    </div>
+    <div class="outlook-import-foot">
+      <button type="button" class="jobs-tb-btn" id="btnCancelRebindImport">取消</button>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitRebindImport">导入</button>
+    </div>
+  </div>
+</div>
+
 <div class="body hidden" id="logPanel">
   <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
   <div class="log" id="logContent">加载中…</div>
@@ -3942,6 +4073,7 @@ const PAGERS = {
   accounts: { page: 1, size: 20 },
   outlook:  { page: 1, size: 20 },
   codex:    { page: 1, size: 20 },
+  rebind:   { page: 1, size: 20 },
 };
 
 function _renderPager(id, total) {
@@ -3961,17 +4093,19 @@ function _renderPager(id, total) {
   const el = document.getElementById('pager-' + id);
   if (el) el.innerHTML = html;
 
-  if (id === 'jobs' || id === 'accounts' || id === 'codex' || id === 'outlook') {
+  if (id === 'jobs' || id === 'accounts' || id === 'codex' || id === 'outlook' || id === 'rebind') {
     const elV2 = document.getElementById(
       id === 'jobs' ? 'pager-jobs-v2'
         : id === 'accounts' ? 'pager-accounts-v2'
         : id === 'codex' ? 'pager-codex-v2'
+        : id === 'rebind' ? 'pager-rebind-v2'
         : 'pager-outlook-v2'
     );
     if (elV2) {
       const sizeWrapId = id === 'jobs' ? 'jobsPagerSize'
         : id === 'accounts' ? 'accountsPagerSize'
         : id === 'codex' ? 'codexPagerSize'
+        : id === 'rebind' ? 'rebindPagerSize'
         : 'outlookPagerSize';
       const v2Sizes = [10, 20, 30, 50, 100];
       const pages = [];
@@ -4045,7 +4179,7 @@ function pagerJump(id, val) {
 function _reloadPagedList(id) {
   // 分页跳转后清空多选，避免跨页残留选中
   if (id === 'accounts') ACCOUNT_SELECTED.clear();
-  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex })[id]?.();
+  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex, rebind: loadRebindPool })[id]?.();
 }
 function pagerGo(id, dir) {
   PAGERS[id].page = Math.max(1, PAGERS[id].page + dir);
@@ -4128,7 +4262,7 @@ function debounce(fn, wait=250) {
 
 // ---------- Tab 切换 ----------
 function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','momolink','gcashtab','gopaytab','config'];
+  const allowed = ['register','accounts','codex','outlook','rebindpool','momolink','gcashtab','gopaytab','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
@@ -4136,6 +4270,7 @@ function activateTab(tab, persist=true) {
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
+  if (tab === 'rebindpool') loadRebindPool();
   if (tab === 'momolink') loadMomoLink();
   if (tab === 'gcashtab') loadGcashLink();
   if (tab === 'gopaytab') loadGopayLink();
@@ -4376,7 +4511,10 @@ function updateModalScrollLock() {
     || !$('#gcashLinkLogPanel').classList.contains('hidden')
     || !$('#gopayLinkAddModal').classList.contains('hidden')
     || !$('#gopayLinkProxyModal').classList.contains('hidden')
-    || !$('#gopayLinkLogPanel').classList.contains('hidden');
+    || !$('#gopayLinkLogPanel').classList.contains('hidden')
+    || !$('#rebindModal').classList.contains('hidden')
+    || !$('#rebindImportModal').classList.contains('hidden')
+    || !$('#rebindLogPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -4815,7 +4953,7 @@ function _planCell(r) {
   return `<span class="pill ${cls}" title="${title}">${esc(plan)}</span>`;
 }
 function _isTrialEligible(account) {
-  const values = ['jp','gb','de','br','th','ph'].map(region => account[`trial_${region}_eligible`]);
+  const values = ['jp','gb','de','br','th','ph','vn'].map(region => account[`trial_${region}_eligible`]);
   if (values.some(value => value === true)) return true;
   if (values.some(value => value === false)) return false;
   return account.plus_trial_eligible === true;
@@ -4851,7 +4989,7 @@ function _trialRegionPill(r, region) {
 function _trialCell(r) {
   const s = r.trial_check_status || '';
   const err = r.trial_check_error || '';
-  const pills = ['jp','gb','de','br','th','ph'].map(region => _trialRegionPill(r, region)).filter(Boolean);
+  const pills = ['jp','gb','de','br','th','ph','vn'].map(region => _trialRegionPill(r, region)).filter(Boolean);
   if (['queued','running'].includes(s)) {
     const queued = s === 'queued';
     const region = (r.trial_check_region || '').toUpperCase();
@@ -4883,7 +5021,7 @@ function _trialAction(r) {
   return `<div class="acc-v2-paypal-group acc-v2-trial-group">`
     + `<button type="button" class="acc-v2-paypal-toggle" data-trial-menu-toggle aria-expanded="false" title="按地区查 Plus 试用资格；每个地区使用独立查试用代理池">查资格</button>`
     + `<div class="acc-v2-paypal-sub">`
-    + ['jp','gb','de','br','th','ph'].map(region => {
+    + ['jp','gb','de','br','th','ph','vn'].map(region => {
       const label = region.toUpperCase();
       return `<button type="button" data-trial-check="${esc(r.id)}" data-trial-region="${region}" title="使用 查询${label}试用代理池 查询该账号的 Plus 试用资格">查${label}</button>`;
     }).join('')
@@ -5228,6 +5366,8 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
+    `<button type="button" data-account-rebind="${esc(r.id)}" title="给该账号换绑邮箱：从换绑邮箱池领取或用 CloudMail 生成新邮箱">换绑邮箱</button>`,
+    `<button type="button" data-account-rebind-log="${esc(r.email)}" title="查看该账号最近一次换绑日志">换绑日志</button>`,
     _planAction(r),
     _trialAction(r),
     _extractLinkAction(r),
@@ -5282,13 +5422,23 @@ function positionAccountsV2MoreMenu(wrap) {
 function renderAccounts() {
   const total = ACCOUNTS_TOTAL;
   const rows = ACCOUNTS;
-  const rowHtmlV2 = (r) => `
+  const rowHtmlV2 = (r) => {
+    const rebindStatus = String(r.rebind_status || '');
+    let rebindBadge = '';
+    if (rebindStatus === 'queued') rebindBadge = ' <span class="pill status-running" title="换绑排队中">换绑排队</span>';
+    else if (rebindStatus === 'running') rebindBadge = ' <span class="pill status-running" title="换绑进行中">换绑中</span>';
+    else if (rebindStatus === 'failed') rebindBadge = ` <span class="pill status-failed" title="${esc(r.rebind_error || '换绑失败')}">换绑失败</span>`;
+    const rebindSub = r.rebind_old_email
+      ? `<div class="acc-v2-sub" title="换绑自 ${esc(r.rebind_old_email)}（${esc(r.rebind_finished_at || '')}）">换绑自 ${esc(r.rebind_old_email)}</div>`
+      : '';
+    return `
     <tr>
       <td class="col-check"><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="col-id">#${esc(r.id)}</td>
       <td class="col-email" title="${esc(r.email || '')}">
-        <div class="acc-v2-email">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>
+        <div class="acc-v2-email">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}${rebindBadge}</div>
         <div class="acc-v2-sub">${esc(r.user_name || '-')}</div>
+        ${rebindSub}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
@@ -5311,6 +5461,7 @@ function renderAccounts() {
         </div>
       </td>
     </tr>`;
+  };
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
@@ -5329,6 +5480,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
     'btnCheckSelectedPlansV2', 'btnCheckSelectedTrialsV2', 'btnExtractSelectedLinksV2',
+    'btnRebindSelectedAccountsV2',
     'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2', 'btnExportSelectedEmailsV2',
@@ -5509,6 +5661,18 @@ async function onAccountsBodyClick(e) {
   const liveLogBtn = e.target.closest('[data-account-live-log]');
   if (liveLogBtn) {
     openLiveLog(liveLogBtn.dataset.accountLiveLog);
+    return;
+  }
+
+  const rebindOneBtn = e.target.closest('[data-account-rebind]');
+  if (rebindOneBtn) {
+    openRebindModal([Number(rebindOneBtn.dataset.accountRebind)]);
+    return;
+  }
+
+  const rebindLogBtn = e.target.closest('[data-account-rebind-log]');
+  if (rebindLogBtn) {
+    openRebindLog(rebindLogBtn.dataset.accountRebindLog);
     return;
   }
 
@@ -6048,7 +6212,7 @@ async function checkOnePlan(id, btn) {
 }
 
 async function checkOneTrial(id, btn, region = 'jp') {
-  const regionCode = ['jp','gb','de','br','th','ph'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
+  const regionCode = ['jp','gb','de','br','th','ph','vn'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
   const regionLabel = regionCode.toUpperCase();
   btn.disabled = true;
   const old = btn.textContent;
@@ -6492,7 +6656,7 @@ async function checkSelectedLive(idsArg = null, btnArg = null) {
 async function checkSelectedTrials(region = 'jp') {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const regionCode = ['jp','gb','de','br','th','ph'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
+  const regionCode = ['jp','gb','de','br','th','ph','vn'].includes(String(region || 'jp').toLowerCase()) ? String(region).toLowerCase() : 'jp';
   const regionLabel = regionCode.toUpperCase();
   const btn = $('#btnCheckSelectedTrialsV2');
   if (!btn) return;
@@ -8219,6 +8383,563 @@ async function deleteSelectedOutlook() {
     updateOutlookSelectionUi();
   }
 }
+// ---------- 换绑邮箱池 ----------
+let REBIND_ROWS = [];
+let REBIND_TOTAL = 0;
+let REBIND_SELECTED = new Set();
+
+function getRebindSource() {
+  const v2 = document.getElementById('rebindSourceV2');
+  return (v2 && v2.value) || 'all';
+}
+const REBIND_SOURCE_LABELS = {
+  all: '全部邮箱',
+  generic_api: '通用 API 取码',
+  cloudmail: 'CloudMail',
+};
+function setRebindSourceV2(val) {
+  const hidden = document.getElementById('rebindSourceV2');
+  const btn = document.getElementById('rebindSourceV2Btn');
+  const wrap = document.getElementById('rebindSourceV2Wrap');
+  if (!hidden) return;
+  const next = REBIND_SOURCE_LABELS[val] ? val : 'all';
+  hidden.value = next;
+  if (btn) btn.textContent = REBIND_SOURCE_LABELS[next] || next;
+  if (wrap) {
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.classList.toggle('is-active', item.dataset.value === next);
+    });
+  }
+}
+function getRebindQuery() {
+  const el = document.getElementById('qRebindV2');
+  return (el ? el.value : '').trim();
+}
+function rebindPoolKey(r) { return `${r.source || r.kind || 'generic_api'}|${r.email || ''}`; }
+function rebindLabel(src) {
+  return ({generic_api:'通用API', cloudmail:'CloudMail'})[src] || src || '-';
+}
+async function loadRebindPool() {
+  try {
+    const source = getRebindSource();
+    const q = getRebindQuery();
+    const p = PAGERS.rebind;
+    const res = await api(`/api/rebind-pool?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+    REBIND_ROWS = res.items || [];
+    REBIND_TOTAL = Number(res.total || REBIND_ROWS.length || 0);
+    const totalPages = Math.max(1, Math.ceil(REBIND_TOTAL / p.size));
+    if (p.page > totalPages) { p.page = totalPages; return loadRebindPool(); }
+    renderRebindPool();
+  } catch(e) { showToast('加载换绑邮箱池失败: ' + e.message); }
+}
+function renderRebindPool() {
+  const total = REBIND_TOTAL;
+  const rows = REBIND_ROWS;
+  const bodyV2 = $('#rebindBodyV2');
+  if (!bodyV2) return;
+  bodyV2.innerHTML = rows.map(r => {
+      const src = esc(r.source || r.kind || 'generic_api');
+      const email = esc(r.email);
+      return `
+    <tr>
+      <td class="col-check"><input type="checkbox" class="rebind-row-check" data-email="${email}" ${REBIND_SELECTED.has(rebindPoolKey(r)) ? 'checked' : ''}></td>
+      <td class="col-email" title="${email}">
+        <div class="acc-v2-email">${email || '-'}</div>
+        <div class="acc-v2-sub" title="${esc(r.copy_line || '')}">${esc(short(r.copy_line, 70))}</div>
+      </td>
+      <td class="col-source">${esc(rebindLabel(r.source || r.kind))}</td>
+      <td class="col-status">${pill(r.status)}</td>
+      <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
+      <td class="col-time" title="${esc(r.imported_at || '-')}">${esc(r.imported_at || '-')}</td>
+      <td class="col-time" title="${esc(r.used_at || '-')}">${esc(r.used_at || '-')}</td>
+      <td class="col-actions">
+        <div class="acc-v2-actions">
+          ${cbtn('复制邮箱', r.copy_line, 'primary')}
+          <button type="button" class="danger" data-rebind-act="delete" data-email="${email}" title="删除换绑邮箱素材">删除</button>
+          <div class="acc-v2-more">
+            <button type="button" class="acc-v2-more-btn" data-rebind-more-toggle aria-haspopup="true">更多</button>
+            <div class="acc-v2-more-menu" role="menu">${_rebindMoreMenu(r)}</div>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#909399;padding:28px;">换绑邮箱池为空</td></tr>';
+  updateRebindSelectionUi(rows);
+  _renderPager('rebind', total);
+}
+function _rebindMoreMenu(r) {
+  const email = esc(r.email);
+  const items = [
+    r.status !== 'available' ? `<button type="button" data-rebind-act="available" data-email="${email}">恢复可用</button>` : '',
+    r.status !== 'disabled' ? `<button type="button" data-rebind-act="disabled" data-email="${email}">停用</button>` : '',
+    r.status !== 'failed' ? `<button type="button" data-rebind-act="failed" data-email="${email}">标失败</button>` : '',
+  ].filter(Boolean).join('');
+  return items;
+}
+function updateRebindSelectionUi(pageRows = null) {
+  const none = REBIND_SELECTED.size === 0;
+  [
+    'btnDeleteSelectedRebindV2',
+    'btnMarkSelectedRebindAvailableV2',
+    'btnDisableSelectedRebindV2',
+    'btnFailSelectedRebindV2',
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = none;
+  });
+
+  if (!pageRows) pageRows = REBIND_ROWS;
+  const pageKeys = pageRows.map(r => rebindPoolKey(r)).filter(Boolean);
+  const checkedCount = pageKeys.filter(key => REBIND_SELECTED.has(key)).length;
+  const allChecked = pageKeys.length > 0 && checkedCount === pageKeys.length;
+  const someChecked = checkedCount > 0 && checkedCount < pageKeys.length;
+  const cbAll = document.getElementById('rebindSelectAllV2');
+  if (!cbAll) return;
+  cbAll.checked = allChecked;
+  cbAll.indeterminate = someChecked;
+  cbAll.disabled = pageKeys.length === 0;
+}
+function onRebindSourceChange(el) {
+  if (el && el.id === 'rebindSourceV2') setRebindSourceV2(el.value);
+  PAGERS.rebind.page = 1;
+  REBIND_SELECTED.clear();
+  loadRebindPool();
+}
+function syncRebindSelectAll(checked) {
+  const pageRows = REBIND_ROWS;
+  if (checked) pageRows.forEach(r => r.email && REBIND_SELECTED.add(rebindPoolKey(r)));
+  else pageRows.forEach(r => REBIND_SELECTED.delete(rebindPoolKey(r)));
+  renderRebindPool();
+}
+function onRebindBodyChange(e) {
+  const cb = e.target.closest('.rebind-row-check');
+  if (!cb) return;
+  const email = cb.dataset.email;
+  const key = REBIND_ROWS.find(r => r.email === email) ? rebindPoolKey(REBIND_ROWS.find(r => r.email === email)) : `|${email}`;
+  if (cb.checked) REBIND_SELECTED.add(key);
+  else REBIND_SELECTED.delete(key);
+  updateRebindSelectionUi();
+}
+function closeRebindV2MoreMenus() {
+  document.querySelectorAll('#rebindPanelV2 .acc-v2-more.open').forEach(el => el.classList.remove('open'));
+}
+function positionRebindV2MoreMenu(wrap) {
+  const btn = wrap.querySelector('.acc-v2-more-btn');
+  const menu = wrap.querySelector('.acc-v2-more-menu');
+  if (!btn || !menu) return;
+  const rect = btn.getBoundingClientRect();
+  const menuW = Math.max(menu.offsetWidth || 148, 148);
+  const menuH = menu.offsetHeight || 0;
+  let left = rect.right - menuW;
+  left = Math.max(8, Math.min(left, window.innerWidth - menuW - 8));
+  let top = rect.bottom + 4;
+  if (top + menuH > window.innerHeight - 8 && rect.top - menuH - 4 > 8) {
+    top = rect.top - menuH - 4;
+  }
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  const actual = menu.getBoundingClientRect();
+  const dx = left - actual.left;
+  const dy = top - actual.top;
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+    menu.style.left = `${left + dx}px`;
+    menu.style.top = `${top + dy}px`;
+  }
+}
+async function onRebindBodyClick(e) {
+  const moreToggle = e.target.closest('[data-rebind-more-toggle]');
+  if (moreToggle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = moreToggle.closest('.acc-v2-more');
+    if (!wrap) return;
+    const willOpen = !wrap.classList.contains('open');
+    closeRebindV2MoreMenus();
+    if (willOpen) {
+      wrap.classList.add('open');
+      positionRebindV2MoreMenu(wrap);
+    }
+    return;
+  }
+  if (e.target.closest('.acc-v2-more-menu')) closeRebindV2MoreMenus();
+
+  const t = e.target.closest('[data-rebind-act]');
+  if (!t) return;
+  const { rebindAct, email } = t.dataset;
+  try {
+    if (rebindAct === 'delete') {
+      if (!confirm(`确定从换绑邮箱池删除 ${email}？此操作不可撤销。`)) return;
+      await api('/api/rebind-pool/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email}) });
+      REBIND_SELECTED.delete(`generic_api|${email}`); REBIND_SELECTED.delete(`cloudmail|${email}`);
+      showToast('已删除');
+    } else {
+      const noteMap = {failed:'手动标记失败', available:'手动恢复可用', disabled:'手动停用'};
+      await api('/api/rebind-pool/status', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, status: rebindAct, note: noteMap[rebindAct] || '手动修改状态'}) });
+      showToast(rebindAct === 'failed' ? '已标失败' : rebindAct === 'disabled' ? '已停用' : '已恢复可用');
+    }
+    loadRebindPool();
+  } catch(err) { showToast('操作失败: ' + err.message); }
+}
+(function bindRebindV2() {
+  const qV2 = $('#qRebindV2');
+  if (qV2) qV2.addEventListener('input', debounce(() => {
+    PAGERS.rebind.page = 1; loadRebindPool();
+  }, 250));
+  const srcWrap = $('#rebindSourceV2Wrap');
+  const srcHidden = $('#rebindSourceV2');
+  if (srcWrap && srcHidden) {
+    const btn = $('#rebindSourceV2Btn');
+    if (btn) btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !srcWrap.classList.contains('open');
+      srcWrap.classList.toggle('open', willOpen);
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+    srcWrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = item.dataset.value;
+        setRebindSourceV2(val);
+        srcWrap.classList.remove('open');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        onRebindSourceChange(srcHidden);
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (srcWrap.contains(e.target)) return;
+      srcWrap.classList.remove('open');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    });
+  }
+  const selectAllV2 = $('#rebindSelectAllV2');
+  if (selectAllV2) selectAllV2.addEventListener('change', (e) => syncRebindSelectAll(e.target.checked));
+  const bodyV2 = $('#rebindBodyV2');
+  if (bodyV2) {
+    bodyV2.addEventListener('change', onRebindBodyChange);
+    bodyV2.addEventListener('click', onRebindBodyClick);
+  }
+  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  bind('btnMarkSelectedRebindAvailableV2', () => bulkMarkRebindStatus('available'));
+  bind('btnDisableSelectedRebindV2', () => bulkMarkRebindStatus('disabled'));
+  bind('btnFailSelectedRebindV2', () => bulkMarkRebindStatus('failed'));
+  bind('btnDeleteSelectedRebindV2', deleteSelectedRebind);
+  bind('btnImportRebindV2', openRebindImportModal);
+  bind('copyAllRebindEmailsV2', () => copyText(REBIND_ROWS.map(r=>r.copy_line).filter(Boolean).join('\n')));
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#rebindPanelV2 .acc-v2-more')) return;
+    closeRebindV2MoreMenus();
+  });
+  window.addEventListener('scroll', () => closeRebindV2MoreMenus(), true);
+  window.addEventListener('resize', () => closeRebindV2MoreMenus());
+  bindRebindImportModal();
+})();
+
+async function bulkMarkRebindStatus(status) {
+  const items = Array.from(REBIND_SELECTED).map(key => {
+    const [, ...rest] = key.split('|');
+    return {email: rest.join('|')};
+  }).filter(it => it.email);
+  if (items.length === 0) { showToast('请先选择邮箱'); return; }
+  const labelMap = {available:'未使用/可用', disabled:'停用', failed:'失败'};
+  const label = labelMap[status] || status;
+  if (!confirm(`确定把选中的 ${items.length} 个换绑邮箱标记为${label}吗？`)) return;
+  const btnId = status === 'disabled'
+    ? 'btnDisableSelectedRebindV2'
+    : status === 'failed'
+      ? 'btnFailSelectedRebindV2'
+      : 'btnMarkSelectedRebindAvailableV2';
+  const btn = document.getElementById(btnId);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/rebind-pool/status-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({items, status, note: `批量标记${label}`}),
+    });
+    REBIND_SELECTED.clear();
+    const skippedCount = (r.skipped || []).length;
+    showToast(skippedCount ? `已更新 ${r.updated_count || 0} 个，跳过 ${skippedCount} 个` : `已更新 ${r.updated_count || 0} 个`);
+    loadRebindPool();
+  } catch(err) {
+    showToast('批量标记失败: ' + err.message);
+    updateRebindSelectionUi();
+  }
+}
+
+async function deleteSelectedRebind() {
+  const items = Array.from(REBIND_SELECTED).map(key => {
+    const [, ...rest] = key.split('|');
+    return {email: rest.join('|')};
+  }).filter(it => it.email);
+  if (items.length === 0) { showToast('请先选择邮箱'); return; }
+  if (!confirm(`确定从换绑邮箱池删除选中的 ${items.length} 个邮箱吗？\n\n此操作不可撤销。`)) return;
+  const delBtn = document.getElementById('btnDeleteSelectedRebindV2'); if (delBtn) delBtn.disabled = true;
+  try {
+    const r = await api('/api/rebind-pool/delete-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({items}),
+    });
+    (r.deleted || []).forEach(item => {
+      REBIND_SELECTED.delete(`generic_api|${item.email}`);
+      REBIND_SELECTED.delete(`cloudmail|${item.email}`);
+    });
+    const skippedCount = (r.skipped || []).length;
+    showToast(skippedCount ? `已删除 ${r.deleted_count || 0} 个，跳过 ${skippedCount} 个` : `已删除 ${r.deleted_count || 0} 个`);
+    loadRebindPool();
+  } catch(err) {
+    showToast('批量删除失败: ' + err.message);
+    updateRebindSelectionUi();
+  }
+}
+
+// ---------- 换绑邮箱池导入弹窗 ----------
+const REBIND_IMPORT_SOURCE_LABELS = {
+  '': '自动识别',
+  generic_api: '通用 API 取码邮箱',
+  cloudmail: 'CloudMail 邮箱',
+};
+function setRebindImportSourceV2(val) {
+  const hidden = document.getElementById('rebindImportSourceV2');
+  const btn = document.getElementById('rebindImportSourceV2Btn');
+  const wrap = document.getElementById('rebindImportSourceV2Wrap');
+  if (!hidden) return;
+  const next = REBIND_IMPORT_SOURCE_LABELS[val] !== undefined ? val : '';
+  hidden.value = next;
+  if (btn) btn.textContent = REBIND_IMPORT_SOURCE_LABELS[next] || next;
+  if (wrap) {
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.classList.toggle('is-active', item.dataset.value === next);
+    });
+  }
+}
+function openRebindImportModal() {
+  const modal = $('#rebindImportModal');
+  if (!modal) return;
+  const result = $('#rebindImportResult');
+  if (result) result.innerHTML = '';
+  modal.classList.remove('hidden');
+  updateModalScrollLock();
+  const ta = $('#rebindImportTextV2');
+  if (ta) setTimeout(() => ta.focus(), 50);
+}
+function closeRebindImportModal() {
+  const modal = $('#rebindImportModal');
+  if (!modal) return;
+  const wrap = $('#rebindImportSourceV2Wrap');
+  if (wrap) wrap.classList.remove('open');
+  modal.classList.add('hidden');
+  updateModalScrollLock();
+}
+function bindRebindImportModal() {
+  const modal = $('#rebindImportModal');
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = '1';
+  const closeBtn = $('#btnCloseRebindImport');
+  const cancelBtn = $('#btnCancelRebindImport');
+  const submitBtn = $('#btnSubmitRebindImport');
+  if (closeBtn) closeBtn.addEventListener('click', closeRebindImportModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeRebindImportModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeRebindImportModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeRebindImportModal();
+  });
+  const wrap = $('#rebindImportSourceV2Wrap');
+  const btn = $('#rebindImportSourceV2Btn');
+  if (wrap && btn) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !wrap.classList.contains('open');
+      wrap.classList.toggle('open', willOpen);
+      btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setRebindImportSourceV2(item.dataset.value);
+        wrap.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (wrap.contains(e.target)) return;
+      wrap.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+  }
+  if (submitBtn) submitBtn.addEventListener('click', () => doImportRebind());
+}
+async function doImportRebind() {
+  const textEl = $('#rebindImportTextV2');
+  const sourceEl = $('#rebindImportSourceV2');
+  const resultEl = $('#rebindImportResult');
+  const submitBtn = $('#btnSubmitRebindImport');
+  const text = textEl ? textEl.value : '';
+  if (!text.trim()) { showToast('请粘贴换绑邮箱素材'); return; }
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const source = sourceEl ? sourceEl.value : '';
+    const r = await api('/api/rebind-pool/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source}) });
+    const msg = `导入换绑邮箱池：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}`;
+    if (resultEl) resultEl.innerHTML = `<div class="banner info">${esc(msg)}</div>`;
+    if (textEl) textEl.value = '';
+    loadRebindPool();
+    showToast(`导入完成：新增 ${r.inserted}，跳过 ${r.skipped}`);
+    setTimeout(closeRebindImportModal, 600);
+  } catch(e) {
+    if (resultEl) resultEl.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    else showToast('导入失败: ' + e.message);
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+// ---------- 账号换绑 ----------
+let REBIND_MODAL_IDS = [];
+function getRebindModalSource() {
+  const checked = document.querySelector('input[name="rebindSource"]:checked');
+  return (checked && checked.value) || 'pool';
+}
+async function openRebindModal(accountIds) {
+  const ids = (accountIds || Array.from(ACCOUNT_SELECTED)).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  REBIND_MODAL_IDS = ids;
+  const desc = $('#rebindModalDesc');
+  if (desc) desc.textContent = `将为选中的 ${ids.length} 个账号更换邮箱；换绑后自动用新邮箱重新登录并刷新 Token`;
+  const hint = $('#rebindModalPoolHint');
+  if (hint) {
+    hint.textContent = '换绑邮箱池可用邮箱查询中…';
+    try {
+      const s = await api('/api/rebind-pool/summary');
+      hint.textContent = `换绑邮箱池当前可用 ${s.available || 0} 个（共 ${s.total || 0} 个）${(s.available || 0) < ids.length ? '；可用数量少于选中账号数，多出的账号会入队失败' : ''}`;
+    } catch(e) { hint.textContent = ''; }
+  }
+  const modal = $('#rebindModal');
+  if (!modal) return;
+  const result = $('#rebindModalResult');
+  if (result) result.innerHTML = '';
+  modal.classList.remove('hidden');
+  updateModalScrollLock();
+}
+function closeRebindModal() {
+  const modal = $('#rebindModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  updateModalScrollLock();
+}
+async function submitRebind() {
+  const ids = REBIND_MODAL_IDS;
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  const source = getRebindModalSource();
+  const sourceLabel = source === 'pool' ? '换绑邮箱池' : 'CloudMail';
+  if (!confirm(`确定给选中的 ${ids.length} 个账号换绑邮箱吗？\n\n新邮箱来源：${sourceLabel}\n换绑成功后账号邮箱会变更为新邮箱，并自动用新邮箱重新登录刷新 Token。\n若账号已保存的 Token 失效，会回退为旧邮箱 OTP 登录（需要旧邮箱能收验证码）。`)) return;
+  const btn = $('#btnSubmitRebindModal');
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '入队中…'; }
+  try {
+    const r = await api('/api/accounts/rebind', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids, source}),
+    });
+    const skipped = (r.skipped || []).length;
+    showToast(`换绑已入队 ${r.started_count || 0} 个，忙碌跳过 ${r.busy_count || 0} 个，失败 ${r.failed_count || 0} 个${skipped ? `，跳过 ${skipped}` : ''}`);
+    const firstProblem = [...(r.failed || []), ...(r.skipped || [])][0];
+    if ((r.started_count || 0) === 0 && firstProblem) {
+      showToast(`换绑入队失败：${firstProblem.error || firstProblem.reason || '未知原因'}`);
+    }
+    const startedIds = (r.started || []).map(item => Number(item.id)).filter(Number.isFinite);
+    const firstStarted = (r.started || [])[0];
+    if (firstStarted?.email) openRebindLog(firstStarted.email);
+    if (startedIds.length) trackRebinds(startedIds);
+    closeRebindModal();
+    await loadAccounts();
+  } catch(err) {
+    showToast('批量换绑失败: ' + err.message);
+  } finally {
+    if (btn) { btn.textContent = old; btn.disabled = false; }
+  }
+}
+(function bindRebindModal() {
+  const modal = $('#rebindModal');
+  if (!modal || modal.dataset.bound) return;
+  modal.dataset.bound = '1';
+  const closeBtn = $('#btnCloseRebindModal');
+  const cancelBtn = $('#btnCancelRebindModal');
+  const submitBtn = $('#btnSubmitRebindModal');
+  if (closeBtn) closeBtn.addEventListener('click', closeRebindModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeRebindModal);
+  if (submitBtn) submitBtn.addEventListener('click', submitRebind);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeRebindModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeRebindModal();
+  });
+})();
+$('#btnRebindSelectedAccountsV2')?.addEventListener('click', () => openRebindModal());
+
+// 换绑进行中的账号：定时刷新账号列表，直到全部结束
+const ACTIVE_REBINDS = new Map();
+let rebindPollTimer = null;
+function trackRebinds(accountIds) {
+  const now = Date.now();
+  accountIds.forEach(id => ACTIVE_REBINDS.set(Number(id), now));
+  if (rebindPollTimer) return;
+  const poll = async () => {
+    await loadAccounts();
+    const nowMs = Date.now();
+    ACTIVE_REBINDS.forEach((startedAt, id) => {
+      const account = ACCOUNTS.find(row => Number(row.id) === id);
+      const pending = account && ['queued', 'running'].includes(account.rebind_status);
+      if (!pending || nowMs - startedAt >= 15 * 60 * 1000) ACTIVE_REBINDS.delete(id);
+    });
+    if (!ACTIVE_REBINDS.size) {
+      clearInterval(rebindPollTimer);
+      rebindPollTimer = null;
+    }
+  };
+  rebindPollTimer = setInterval(poll, 3000);
+  poll();
+}
+
+// ---------- 换绑日志面板 ----------
+let rebindLogEmail = null, rebindLogTimer = null;
+function openRebindLog(email) {
+  rebindLogEmail = email;
+  $('#rebindLogEmail').textContent = email;
+  $('#rebindLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#rebindLogContent').textContent = '加载中…';
+  pollRebindLog();
+  clearInterval(rebindLogTimer);
+  rebindLogTimer = setInterval(pollRebindLog, 3000);
+}
+async function pollRebindLog() {
+  if (!rebindLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/rebind-log?email=${encodeURIComponent(rebindLogEmail)}`);
+    const c = $('#rebindLogContent');
+    if (!c) return;
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (!r.running) {
+      clearInterval(rebindLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+function closeRebindLogModal() {
+  rebindLogEmail = null;
+  clearInterval(rebindLogTimer);
+  $('#rebindLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+$('#btnCloseRebindLog')?.addEventListener('click', closeRebindLogModal);
+
 // ---------- Codex 授权 ----------
 let CODEX = [];
 let CODEX_TOTAL = 0;

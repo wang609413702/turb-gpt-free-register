@@ -28,6 +28,12 @@ accounts_viewer.html
 # Cloudflare 域名邮箱池（运行时数据）
 用于注册的域名邮箱.json
 
+# 换绑邮箱池（运行时数据，含私有取码地址）与换绑运行日志
+用于换绑的邮箱.json
+用于换绑的邮箱.txt
+换绑日志/
+webui.err.log
+
 # 旧版数据/历史迁移残留
 data/
 

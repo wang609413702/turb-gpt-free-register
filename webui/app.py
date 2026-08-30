@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, trial_check_service, momo_check_service, gcash_check_service, kakao_check_service, paypal_check_service, ideal_check_service, gopay_check_service, extract_link_service, codex_agent_service, live_check_service
+from core import codex_retry_service, db, plan_check_service, trial_check_service, momo_check_service, gcash_check_service, kakao_check_service, paypal_check_service, ideal_check_service, gopay_check_service, extract_link_service, codex_agent_service, live_check_service, rebind_service
 from core import momo_link_db, momo_link_service
 from core import gcash_link_db, gcash_link_service
 from core import gopay_link_db, gopay_link_service
@@ -336,6 +336,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_live_checks = db.recover_interrupted_live_checks()
     if recovered_live_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
+    recovered_rebinds = db.recover_interrupted_rebinds()
+    if recovered_rebinds:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的换绑状态", recovered_rebinds)
     recovered_codex_agents = db.recover_interrupted_codex_agents()
     if recovered_codex_agents:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
@@ -2746,6 +2749,171 @@ def create_app(auth_code: str | None = None) -> Flask:
         })
 
     # ----------------------------------------------------------
+    # 换绑邮箱池（给账号换绑用的新邮箱素材）
+    # ----------------------------------------------------------
+    @app.get("/api/rebind-pool")
+    def api_rebind_pool():
+        status = request.args.get("status") or None
+        limit = request.args.get("limit", default=500, type=int)
+        kind = str(request.args.get("source") or request.args.get("kind") or "all").strip()
+        q = str(request.args.get("q", default="") or "").strip()
+        paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
+        page_arg = request.args.get("page", default=None, type=int)
+        page_size_arg = request.args.get("page_size", default=None, type=int)
+        fetch_limit = 1_000_000 if (paged or q) else limit
+        rows = db.list_rebind_email_pool(status=status, limit=fetch_limit)
+        if kind in ("generic_api", "cloudmail"):
+            rows = [r for r in rows if (r.get("kind") or "generic_api") == kind]
+        for r in rows:
+            r["source"] = r.get("kind") or "generic_api"
+        if q:
+            rows = [r for r in rows if _matches_query(r, q)]
+        if paged or page_arg is not None or page_size_arg is not None:
+            page = max(1, int(page_arg or 1))
+            page_size = max(1, min(500, int(page_size_arg or limit or 50)))
+            return jsonify(_paginate_items(rows, page=page, page_size=page_size))
+        return jsonify(rows[:limit])
+
+    @app.get("/api/rebind-pool/summary")
+    def api_rebind_pool_summary():
+        return jsonify(db.rebind_email_pool_summary())
+
+    @app.post("/api/rebind-pool/import")
+    def api_rebind_pool_import():
+        """
+        粘贴文本导入换绑邮箱池。
+        通用 API：email----code_url（---- 或 ==== 分隔）；CloudMail：每行一个邮箱。
+        未识别为 CloudMail 域名且没有取码地址的行按 CloudMail 素材导入（换绑时轮询其收件箱）。
+        """
+        data = request.get_json(silent=True) or {}
+        text = data.get("text") or ""
+        force_kind = (data.get("source") or data.get("kind") or "").strip()
+        if force_kind not in ("", "generic_api", "cloudmail"):
+            return jsonify({"ok": False, "error": "导入类型非法"}), 400
+        try:
+            from config import email as _email_cfg
+            from core.cloudmail_client import _normalize_domains
+            cm_domains = {d.lower() for d in _normalize_domains(getattr(_email_cfg, "CLOUDMAIL_DOMAINS", []) or [])}
+        except Exception:
+            cm_domains = set()
+
+        records = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("----") if "----" in line else line.split("====")
+            parts = [p.strip() for p in parts]
+            email = parts[0] if parts else ""
+            if not email or "@" not in email:
+                continue
+            if force_kind == "generic_api" or (not force_kind and len(parts) >= 2 and parts[1]):
+                if len(parts) < 2 or not parts[1]:
+                    continue
+                records.append({"email": email, "code_url": parts[1], "kind": "generic_api"})
+                continue
+            domain = email.rsplit("@", 1)[1].lower()
+            kind = "cloudmail" if (not force_kind and domain in cm_domains) else (force_kind or "cloudmail")
+            records.append({"email": email, "kind": kind})
+        if not records:
+            return jsonify({"ok": False, "error": "未解析到有效邮箱行（通用API: email----取码地址；CloudMail: 每行一个邮箱）"}), 400
+        inserted, skipped = db.import_rebind_emails(records)
+        return jsonify({"ok": True, "inserted": inserted, "skipped": skipped, "parsed": len(records)})
+
+    @app.post("/api/rebind-pool/status")
+    def api_rebind_pool_status():
+        """手动改换绑邮箱状态：body {email, status, note?}。status ∈ available/used/failed/disabled。"""
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip()
+        status = (data.get("status") or "").strip()
+        if not email or status not in ("available", "used", "failed", "disabled"):
+            return jsonify({"ok": False, "error": "email 或 status 非法"}), 400
+        db.release_rebind_email(email, status=status, note=data.get("note"))
+        return jsonify({"ok": True})
+
+    @app.post("/api/rebind-pool/status-bulk")
+    def api_rebind_pool_status_bulk():
+        """批量修改换绑邮箱状态。Body {items:[{email}], status, note?}。"""
+        data = request.get_json(silent=True) or {}
+        items = data.get("items") or data.get("emails") or []
+        status = (data.get("status") or "").strip()
+        note = data.get("note")
+        if status not in ("available", "used", "failed", "disabled"):
+            return jsonify({"ok": False, "error": "status 非法"}), 400
+        if not isinstance(items, list) or not items:
+            return jsonify({"ok": False, "error": "items/emails 必须是非空数组"}), 400
+        if len(items) > 5000:
+            return jsonify({"ok": False, "error": "单次最多操作 5000 个邮箱"}), 400
+
+        updated = []
+        skipped = []
+        seen = set()
+        for raw_item in items:
+            email = (str(raw_item.get("email") or "") if isinstance(raw_item, dict) else str(raw_item or "")).strip()
+            if not email:
+                skipped.append({"email": raw_item, "reason": "邮箱为空"})
+                continue
+            key = email.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                db.release_rebind_email(email, status=status, note=note)
+                updated.append({"email": email, "status": status})
+            except Exception as exc:
+                skipped.append({"email": email, "reason": f"{type(exc).__name__}: {exc}"})
+        return jsonify({
+            "ok": True,
+            "updated": updated,
+            "updated_count": len(updated),
+            "skipped": skipped,
+        })
+
+    @app.post("/api/rebind-pool/delete")
+    def api_rebind_pool_delete():
+        """从换绑邮箱池彻底删除一个邮箱：body {email}。"""
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+        deleted = db.delete_rebind_email(email)
+        return jsonify({"ok": True, "deleted": deleted})
+
+    @app.post("/api/rebind-pool/delete-bulk")
+    def api_rebind_pool_delete_bulk():
+        """从换绑邮箱池批量彻底删除邮箱：body {emails: [...]}。"""
+        data = request.get_json(silent=True) or {}
+        emails = data.get("items") or data.get("emails") or []
+        if not isinstance(emails, list) or not emails:
+            return jsonify({"ok": False, "error": "emails/items 必须是非空数组"}), 400
+        if len(emails) > 5000:
+            return jsonify({"ok": False, "error": "单次最多删除 5000 个邮箱"}), 400
+
+        deleted: list[str] = []
+        skipped: list[dict] = []
+        seen: set[str] = set()
+        for raw_item in emails:
+            email = (str(raw_item.get("email") or "") if isinstance(raw_item, dict) else str(raw_item or "")).strip()
+            if not email:
+                skipped.append({"email": raw_item, "reason": "邮箱为空"})
+                continue
+            key = email.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if db.delete_rebind_email(email):
+                deleted.append({"email": email})
+            else:
+                skipped.append({"email": email, "reason": "邮箱不存在"})
+
+        return jsonify({
+            "ok": True,
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+            "skipped": skipped,
+        })
+
+    # ----------------------------------------------------------
     # 域名邮箱池（Cloudflare 域名邮箱模式）
     # ----------------------------------------------------------
     @app.get("/api/domain-pool")
@@ -3327,6 +3495,96 @@ def create_app(auth_code: str | None = None) -> Flask:
             "ok": True,
             "log": content,
             "running": live_check_service.is_checking(email),
+        })
+
+    @app.post("/api/accounts/rebind")
+    def api_accounts_rebind_bulk():
+        """
+        批量换绑：给选中账号更换邮箱并重新登录拿新 token。
+        Body {account_ids: [...], source: "pool"|"cloudmail"}。
+        pool=从换绑邮箱池领取新邮箱；cloudmail=用 CloudMail 生成随机新邮箱并取验证码。
+        """
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        source = str(data.get("source") or "pool").strip()
+        if source not in ("pool", "cloudmail"):
+            return jsonify({"ok": False, "error": "source 必须是 pool（换绑邮箱池）或 cloudmail"}), 400
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多换绑 500 个账号"}), 400
+
+        account_ids: list[int] = []
+        skipped: list[dict] = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            account_ids.append(acc_id)
+
+        started = []
+        busy_count = 0
+        failed = []
+        for acc_id in account_ids:
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "").strip()
+            if not email:
+                skipped.append({"id": acc_id, "reason": "邮箱为空"})
+                continue
+            queued = rebind_service.enqueue_account_rebind(
+                account_id=acc_id,
+                email=email,
+                source=source,
+            )
+            if queued.get("accepted"):
+                started.append({"id": acc_id, "email": email, "status": "queued"})
+            elif queued.get("busy"):
+                busy_count += 1
+                skipped.append({"id": acc_id, "email": email, "reason": queued.get("error") or "正在换绑"})
+            else:
+                failed.append({"id": acc_id, "email": email, "error": queued.get("error") or "入队失败"})
+                skipped.append({"id": acc_id, "email": email, "reason": queued.get("error") or "入队失败"})
+
+        return jsonify({
+            "ok": True,
+            "message": f"已入队 {len(started)} 个换绑任务",
+            "started": started,
+            "started_count": len(started),
+            "busy_count": busy_count,
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "queue": rebind_service.queue_settings(),
+        }), 202
+
+    @app.get("/api/accounts/rebind-log")
+    def api_account_rebind_log():
+        """读取某邮箱最近一次换绑日志。?email=xxx"""
+        email = (request.args.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+        p = rebind_service.log_path(email)
+        if not p.exists():
+            return jsonify({"ok": True, "log": "", "running": rebind_service.is_rebinding(email)})
+        max_bytes = 80_000
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            content = f.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": rebind_service.is_rebinding(email),
         })
 
     # ----------------------------------------------------------
