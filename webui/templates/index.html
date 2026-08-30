@@ -740,6 +740,7 @@
     .accounts-table-v2 .col-id { width: 72px; }
     .accounts-table-v2 .col-email { width: 240px; }
     .accounts-table-v2 .col-source { width: 90px; }
+    .accounts-table-v2 .col-rebind { width: 64px; }
     .accounts-table-v2 .col-token { width: 100px; }
     .accounts-table-v2 .col-region { width: 72px; }
     .accounts-table-v2 .col-plan { width: 170px; }
@@ -3381,7 +3382,7 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-region"><col class="col-plan"><col class="col-trial"><col class="col-momo"><col class="col-note"><col class="col-small">
+            <col class="col-rebind"><col class="col-token"><col class="col-region"><col class="col-plan"><col class="col-trial"><col class="col-momo"><col class="col-note"><col class="col-small">
             <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -3390,6 +3391,7 @@
               <th class="col-id">ID</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
+              <th class="col-rebind" title="是否已换绑过邮箱">换绑</th>
               <th class="col-token">Token</th>
               <th class="col-region">地区</th>
               <th class="col-plan">套餐</th>
@@ -5431,6 +5433,14 @@ function renderAccounts() {
     const rebindSub = r.rebind_old_email
       ? `<div class="acc-v2-sub" title="换绑自 ${esc(r.rebind_old_email)}（${esc(r.rebind_finished_at || '')}）">换绑自 ${esc(r.rebind_old_email)}</div>`
       : '';
+    // 是否换绑：成功换过绑的账号（含历史已换绑）显示「是」，其余「否」
+    const rebindDone = Boolean(r.rebind_old_email) || rebindStatus === 'success';
+    const rebindDoneTitle = rebindDone
+      ? `已换绑${r.rebind_old_email ? `：换绑自 ${r.rebind_old_email}${r.rebind_finished_at ? `（${r.rebind_finished_at}）` : ''}` : ''}`
+      : '未换绑过邮箱';
+    const rebindDoneCell = rebindDone
+      ? '<span class="pill status-success">是</span>'
+      : '<span class="acc-v2-muted">否</span>';
     return `
     <tr>
       <td class="col-check"><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
@@ -5441,6 +5451,7 @@ function renderAccounts() {
         ${rebindSub}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
+      <td class="col-rebind" title="${esc(rebindDoneTitle)}">${rebindDoneCell}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-region">${esc(r.registration_country || '-')}</td>
       <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
@@ -5465,7 +5476,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="15" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="16" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);

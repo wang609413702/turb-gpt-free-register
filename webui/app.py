@@ -164,6 +164,9 @@ def _compact_account_for_list(row: dict) -> dict:
         "gopay_has_gopay", "gopay_decision", "gopay_decision_text", "gopay_supported",
         "gopay_methods", "gopay_check_error", "gopay_checked_at",
         "gopay_exit_ip", "gopay_exit_country", "gopay_session_kind",
+        # 换绑状态（是否换绑列 / 换绑徽标 / 换绑自提示）。
+        "rebind_status", "rebind_old_email", "rebind_new_email",
+        "rebind_error", "rebind_finished_at",
     )
     for key in optional_keys:
         value = row.get(key)
