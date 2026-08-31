@@ -10,7 +10,7 @@
     - socks5h://           SOCKS5（DNS 在代理端解析，推荐，避免 DNS-IP 错配）
 """
 from config.env_loader import apply_env_overrides
-from config.trial import TRIAL_PROXY_POOL_NAMES
+from config.trial import TRIAL_PROXY_POOL_NAMES, TRIAL_REGIONS
 from urllib.parse import quote
 import random
 
@@ -64,6 +64,10 @@ TRIAL_TH_PROXY_POOL: list[str] = []
 TRIAL_PH_PROXY_POOL: list[str] = []
 TRIAL_ID_PROXY_POOL: list[str] = []
 TRIAL_VN_PROXY_POOL: list[str] = []
+
+# 注册完成后自动查试用资格使用的默认地区：jp/gb/de/br/th/ph/id/vn。
+# 选哪个地区，注册完就走哪个地区的试用代理池查询；值无效时回退 jp。
+TRIAL_CHECK_DEFAULT_REGION: str = "jp"
 
 # GCash 检测：PH/PHP 返回 OpenAI 自定义结账（oaics_），GCash 只出现在
 # custom_payment_methods（cpmt_*），不在 payment_method_types 里。
@@ -263,6 +267,12 @@ def pick_gopay_proxy() -> str:
     return random.choice(valid) if valid else ""
 
 
+def default_trial_region() -> str:
+    """注册后自动查试用资格的默认地区；配置值无效时回退 jp。"""
+    value = str(TRIAL_CHECK_DEFAULT_REGION or "").strip().lower()
+    return value if value in TRIAL_REGIONS else "jp"
+
+
 def pick_trial_proxy(region: str = "jp") -> str:
     """从对应地区资格代理池随机抽取并归一化一个代理 URL；池为空返回空串。
 
@@ -294,6 +304,7 @@ apply_env_overrides(globals(), {
     'PAYPAL_DE_PROXY_POOL': 'list_str_multiline',
     'IDEAL_PROXY_POOL': 'list_str_multiline',
     'GOPAY_PROXY_POOL': 'list_str_multiline',
+    'TRIAL_CHECK_DEFAULT_REGION': 'str',
     'TRIAL_JP_PROXY_POOL': 'list_str_multiline',
     'TRIAL_GB_PROXY_POOL': 'list_str_multiline',
     'TRIAL_DE_PROXY_POOL': 'list_str_multiline',

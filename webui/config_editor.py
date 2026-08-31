@@ -577,8 +577,12 @@ EDITABLE_FIELDS = [
 
     # ---- 查试用代理池 ----
     {
+        "key": "TRIAL_CHECK_DEFAULT_REGION", "file": "proxy.py", "type": "str", "group": "查试用代理池",
+        "label": "注册后默认查试用地区", "help": "注册完成后自动查试用资格走哪个地区的代理池：jp/gb/de/br/th/ph/id/vn（小写）；填其他值时回退 jp",
+    },
+    {
         "key": "TRIAL_JP_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
-        "label": "查询JP试用代理池(每行一个)", "help": "查 JP 试用资格专用代理池，必须是 JP 出口；试用资格按出口地区下发，池为空时查 JP 资格会直接报错（不会回退直连）。注册后自动用此池查 JP 资格",
+        "label": "查询JP试用代理池(每行一个)", "help": "查 JP 试用资格专用代理池，必须是 JP 出口；试用资格按出口地区下发，池为空时查 JP 资格会直接报错（不会回退直连）。注册后默认地区选 jp 时自动用此池",
     },
     {
         "key": "TRIAL_GB_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",

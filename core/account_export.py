@@ -625,7 +625,13 @@ def save_account_data(
                         logger.exception("[Plan] 写入浏览器套餐降级失败状态异常: account_id=%s", row_id)
     else:
         logger.info(f"[Plan] 注册后自动套餐查询已跳过: id={row_id}, email={email}")
-    # 注册默认查 JP 试用资格（走 TRIAL_JP_PROXY_POOL）；JP 池未配置时跳过，不影响注册。
+    # 注册后按配置的默认地区查试用资格（走对应 TRIAL_*_PROXY_POOL 池）；池未配置时跳过，不影响注册。
+    try:
+        from config.proxy import default_trial_region
+
+        trial_region = default_trial_region()
+    except Exception:
+        trial_region = "jp"
     try:
         from core.trial_check_service import enqueue_account_trial_check
 
@@ -633,18 +639,18 @@ def save_account_data(
             account_id=row_id,
             email=email,
             access_token=access_token,
-            region="jp",
+            region=trial_region,
             trigger="registration_auto",
         )
         if trial_queued.get("accepted"):
-            logger.info(f"[Trial] 注册后自动查询 JP 试用资格已入队: id={row_id}, email={email}")
+            logger.info(f"[Trial] 注册后自动查询 {trial_region.upper()} 试用资格已入队: id={row_id}, email={email}")
         elif trial_queued.get("busy"):
             logger.info(f"[Trial] 账号已有试用资格查询，注册流程不重复入队: id={row_id}, email={email}")
         else:
-            logger.warning(f"[Trial] 注册后自动查询 JP 资格入队失败（不影响注册结果）: {email}, {trial_queued.get('error')}")
+            logger.warning(f"[Trial] 注册后自动查询 {trial_region.upper()} 资格入队失败（不影响注册结果）: {email}, {trial_queued.get('error')}")
     except Exception as exc:
         logger.warning(
-            f"[Trial] 注册后自动查询 JP 资格入队异常（不影响注册结果）: "
+            f"[Trial] 注册后自动查询试用资格入队异常（不影响注册结果）: "
             f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
         )
     return row_id

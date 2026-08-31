@@ -494,5 +494,62 @@ class TrialRegionWebUiTests(unittest.TestCase):
                 self.assertLess(text.index(optimistic_marker), text.index(post_marker))
 
 
+class RegistrationDefaultRegionTests(unittest.TestCase):
+    """注册后自动查试用资格使用「注册后默认查试用地区」配置。"""
+
+    def test_default_trial_region_reads_config_with_fallback(self):
+        self.assertEqual(proxy_cfg.default_trial_region(), "jp")
+        with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "vn"):
+            self.assertEqual(proxy_cfg.default_trial_region(), "vn")
+        with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "XX"):
+            self.assertEqual(proxy_cfg.default_trial_region(), "jp")
+
+    def _save_patches(self, root: Path):
+        return (
+            patch.object(db, "_ACCOUNTS_JSON", root / "accounts.json"),
+            patch.object(db, "_LEGACY_ACCOUNTS_JSON", root / "legacy.json"),
+            patch.object(db, "_OUTLOOK_JSON", root / "outlook.json"),
+            patch.object(db, "_ACCOUNTS_TXT", root / "accounts.txt"),
+            patch.object(db, "_TOKENS_TXT", root / "tokens.txt"),
+            patch.object(db, "_OUTLOOK_TXT", root / "outlook.txt"),
+            patch.object(db, "_VIEWER_HTML", root / "viewer.html"),
+        )
+
+    def test_save_account_data_enqueues_configured_region(self):
+        from core.account_export import save_account_data
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with ExitStack() as stack:
+                for item in self._save_patches(root):
+                    stack.enter_context(item)
+                with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "de"), \
+                     patch("core.trial_check_service.enqueue_account_trial_check") as enqueue_trial, \
+                     patch("core.twofa_service.enqueue_account_totp_setup") as enqueue_totp:
+                    enqueue_trial.return_value = {"accepted": True}
+                    enqueue_totp.return_value = {"accepted": True}
+                    row_id = save_account_data(email="de@example.com", access_token="tok")
+                self.assertTrue(row_id)
+                enqueue_trial.assert_called_once()
+                self.assertEqual(enqueue_trial.call_args.kwargs["region"], "de")
+                self.assertEqual(enqueue_trial.call_args.kwargs["trigger"], "registration_auto")
+
+    def test_save_account_data_falls_back_to_jp_on_invalid_config(self):
+        from core.account_export import save_account_data
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with ExitStack() as stack:
+                for item in self._save_patches(root):
+                    stack.enter_context(item)
+                with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "nope"), \
+                     patch("core.trial_check_service.enqueue_account_trial_check") as enqueue_trial, \
+                     patch("core.twofa_service.enqueue_account_totp_setup") as enqueue_totp:
+                    enqueue_trial.return_value = {"accepted": True}
+                    enqueue_totp.return_value = {"accepted": True}
+                    save_account_data(email="jp@example.com", access_token="tok")
+                self.assertEqual(enqueue_trial.call_args.kwargs["region"], "jp")
+
+
 if __name__ == "__main__":
     unittest.main()
