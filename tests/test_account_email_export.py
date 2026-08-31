@@ -64,11 +64,9 @@ class SecretBulkEndpointTests(unittest.TestCase):
                     stack.enter_context(p)
                     id1 = db.insert_account(email="x@y.z", access_token="tok")
                     # 直接补素材行（insert_account 只在邮箱池命中时才写 original_email_line）
-                    import json as _json
-                    acc_path = root / "accounts.json"
-                    rows = _json.loads(acc_path.read_text(encoding="utf-8"))
-                    next(r for r in rows if r["id"] == id1)["original_email_line"] = "x@y.z----p----c----r"
-                    acc_path.write_text(_json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+                    acc = db.get_account(id1)
+                    acc["original_email_line"] = "x@y.z----p----c----r"
+                    db._save_accounts([acc])
                     id2 = db.insert_account(email="plain@y.z", access_token="tok2")
 
                     app = create_app(auth_code="test-auth")

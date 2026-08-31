@@ -391,44 +391,38 @@ class KakaoPaypalDbTests(unittest.TestCase):
 
 
 class FastSaveTests(unittest.TestCase):
-    """检测状态写入走快速保存：只写 JSON，不重建 TXT/静态查看页。"""
+    """检测状态写入可正常持久化（SQLite 存储下同步参数仅为兼容保留）。"""
 
-    def test_status_update_skips_txt_and_viewer(self):
+    def test_status_update_persists_under_sqlite(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            accounts_path = root / "accounts.json"
-            accounts_txt = root / "accounts.txt"
-            tokens_txt = root / "tokens.txt"
-            viewer = root / "viewer.html"
-            with patch.object(db, "_ACCOUNTS_JSON", accounts_path), \
+            with patch.object(db, "_ACCOUNTS_JSON", root / "accounts.json"), \
                  patch.object(db, "_LEGACY_ACCOUNTS_JSON", root / "legacy.json"), \
                  patch.object(db, "_OUTLOOK_JSON", root / "outlook.json"), \
-                 patch.object(db, "_ACCOUNTS_TXT", accounts_txt), \
-                 patch.object(db, "_TOKENS_TXT", tokens_txt), \
+                 patch.object(db, "_ACCOUNTS_TXT", root / "accounts.txt"), \
+                 patch.object(db, "_TOKENS_TXT", root / "tokens.txt"), \
                  patch.object(db, "_OUTLOOK_TXT", root / "outlook.txt"), \
-                 patch.object(db, "_VIEWER_HTML", viewer):
-                # 新账号走全量保存：JSON + TXT 立即生成，viewer 由上游防抖线程异步生成。
-                with patch.object(db, "_VIEWER_DEBOUNCE_SECONDS", 0.01):
-                    db.insert_account(email="fast@test.com", access_token="tok")
-                    time.sleep(0.05)
-                self.assertTrue(accounts_path.exists())
-                self.assertTrue(accounts_txt.exists())
-                self.assertTrue(viewer.exists())
+                 patch.object(db, "_VIEWER_HTML", root / "viewer.html"):
+                db.insert_account(email="fast@test.com", access_token="tok")
 
-                # 删掉 TXT/viewer，再触发一次检测状态写入（快速保存）。
-                accounts_txt.unlink()
-                viewer.unlink()
+                # 检测状态写入（历史快速路径调用点，sync_artifacts=False）。
                 db.update_account_momo_check(
                     email="fast@test.com",
                     result={"ok": True, "has_target": True, "session_kind": "cs",
                             "checked_at": "2026-01-01T00:00:00"},
                 )
-                # 快速保存不应重建 TXT 与 viewer，JSON 仍更新。
-                self.assertFalse(accounts_txt.exists())
-                self.assertFalse(viewer.exists())
                 row = db.get_account_by_email("fast@test.com")
                 self.assertEqual(row["momo_check_status"], "success")
                 self.assertEqual(row["momo_session_kind"], "cs")
+
+                # 显式传 sync_artifacts=False 的兼容签名同样落库。
+                db.update_account_momo_check(
+                    email="fast@test.com",
+                    result={"ok": True, "has_target": True, "session_kind": "oaics",
+                            "checked_at": "2026-01-02T00:00:00"},
+                )
+                row = db.get_account_by_email("fast@test.com")
+                self.assertEqual(row["momo_session_kind"], "oaics")
 
     def test_update_backfills_exit_from_result(self):
         with tempfile.TemporaryDirectory() as td:

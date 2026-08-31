@@ -10,15 +10,16 @@ EMAIL_SOURCE 支持单个或多个来源：
     "gptmail"
     "mailnest"
     "cloudmail"
-    "outlook,generic_api,mailnest,cloudmail"          # 按顺序兜底
-    ["outlook", "generic_api", "mailnest", "cloudmail"]  # 也兼容列表写法
+    "remail"
+    "outlook,generic_api,mailnest,cloudmail,remail"   # 按顺序兜底
+    ["outlook", "generic_api", "mailnest", "cloudmail", "remail"]  # 也兼容列表写法
 """
 import logging
 from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
-_VALID_SOURCES = ("outlook", "generic_api", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail")
+_VALID_SOURCES = ("outlook", "generic_api", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail")
 
 
 def parse_email_sources(value=None) -> list[str]:
@@ -65,6 +66,9 @@ def _pick_from_source(source: str) -> str:
     if source == "cloudmail":
         from core.cloudmail_client import pick_account
         return pick_account().email
+    if source == "remail":
+        from core.remail_client import pick_account
+        return pick_account().email
     from core.outlook_client import pick_account
     return pick_account().email
 
@@ -85,6 +89,27 @@ def acquire_email() -> str:
     raise RuntimeError(f"所有邮箱来源均领取失败: {sources}; last={last_exc}")
 
 
+def acquire_email_after_input(email: str | None = None) -> str:
+    """在浏览器已找到邮箱输入框后领取邮箱。
+
+    浏览器驱动把“找到输入框”和“领取邮箱”拆成两个阶段，避免页面加载、风控
+    或入口识别失败时提前消耗邮箱。传入已有邮箱时不重复领取，兼容固定邮箱模式。
+    """
+    current = str(email or "").strip()
+    if current:
+        return current
+
+    from config import email as _email_cfg
+
+    if not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", False)):
+        raise RuntimeError("页面已找到邮箱输入框，但自动取邮箱未启用且未配置 REGISTER_EMAIL")
+    allocated = str(acquire_email() or "").strip()
+    if not allocated:
+        raise RuntimeError("邮箱服务返回了空邮箱地址")
+    logger.info("[EmailProvider] 已找到邮箱输入框，开始分配邮箱: %s", allocated)
+    return allocated
+
+
 def resolve_email_source(email: str) -> str:
     """根据邮箱在各池中的归属判断实际来源。"""
     from core.gptmail_client import get_account_context as get_gptmail_context
@@ -99,6 +124,9 @@ def resolve_email_source(email: str) -> str:
     from core.cloudmail_client import get_account_context as get_cloudmail_context
     if get_cloudmail_context(email):
         return "cloudmail"
+    from core.remail_client import get_account_context as get_remail_context
+    if get_remail_context(email):
+        return "remail"
 
     from core import db
     if db.get_generic_api_email_by_email(email):
@@ -175,6 +203,9 @@ def wait_for_otp(
     if source == "cloudmail":
         from core.cloudmail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
+    if source == "remail":
+        from core.remail_client import fetch_latest_otp
+        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     from core.outlook_client import fetch_latest_otp
     return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
 
@@ -199,6 +230,9 @@ def release_email(email: str, status: str = "available", note: str | None = None
         release_account(email, status=status, note=note)
     elif source == "cloudmail":
         from core.cloudmail_client import release_account
+        release_account(email, status=status, note=note)
+    elif source == "remail":
+        from core.remail_client import release_account
         release_account(email, status=status, note=note)
     else:
         from core.outlook_client import release_account

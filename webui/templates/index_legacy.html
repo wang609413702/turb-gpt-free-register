@@ -215,7 +215,7 @@
       grid-template-columns: 1fr;
     }
     .accounts-topbar { display: flex; gap: 12px; align-items: center; justify-content: flex-start; min-width: 0; flex-wrap: wrap; }
-    .accounts-toolbar .search { flex: 1 1 520px; min-width: 280px; max-width: 620px; }
+    .accounts-toolbar .search { flex: 0 1 400px; min-width: 240px; max-width: 400px; }
     .account-filter-strip { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
     .selected-hint { font-size: 12px; font-weight: 800; padding: 0 6px; white-space: nowrap; }
     .accounts-actionbar {
@@ -350,6 +350,14 @@
       background: var(--soft); font-size: 13px; font-weight: 900;
     }
     .config-subhead .hint { display:block; margin-top:3px; color:var(--muted); font-size:12px; font-weight:400; line-height:1.45; }
+    .config-subhead.remail-subhead .hint { display: inline; }
+    .config-subhead .remail-promo-notice {
+      display: inline-flex; align-items: center; width: fit-content;
+      margin: 0 0 0 10px; padding: 7px 11px;
+      color: #b42318; background: #fff1f0; border: 1px solid #fecdca;
+      border-radius: 7px; font-size: 12px; font-weight: 800; line-height: 1.4;
+      vertical-align: middle; white-space: nowrap;
+    }
     .config-subtabs {
       grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap;
       padding: 8px; border: 1px solid #edf1f5; border-radius: 8px; background: #fbfcfe;
@@ -377,6 +385,13 @@
     .config-panel label.fld .hint .mono {
       white-space: normal; overflow-wrap: anywhere; word-break: break-all;
     }
+    .config-field-wrap { min-width: 0; }
+    .config-field-wrap > label.fld { margin-bottom: 0; }
+    .config-external-link {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 7px;
+      color: var(--blue); font-size: 12px; font-weight: 700; text-decoration: none;
+    }
+    .config-external-link:hover { text-decoration: underline; }
     .config-count { opacity: .72; font-weight: 700; margin-left: 4px; }
     .roxy-workspace-box {
       grid-column: 1 / -1; border: 1px solid #c3d4fb; background: #eef4ff;
@@ -509,8 +524,17 @@
                 <option value="deactivated">账号废号</option>
               </select>
             </label>
+            <label class="inline-num" title="按账号 2FA/TOTP 状态筛选账号">
+              2FA
+              <select id="totpStatusFilter" style="width:auto;min-height:auto;">
+                <option value="">全部</option>
+                <option value="enabled">已开启</option>
+                <option value="disabled">未开启</option>
+                <option value="pending">设置中</option>
+                <option value="failed">设置失败</option>
+              </select>
+            </label>
             <button class="btn" id="btnRefreshAccounts" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
-            <button class="btn primary" id="btnCheckSelectedLiveTop" data-live-check-selected="1" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           </div>
         </div>
         <div class="accounts-actionbar">
@@ -1215,6 +1239,10 @@ function getAccountsCodexFilter() {
   const el = $('#codexStatusFilter');
   return (el ? el.value : '').trim();
 }
+function getAccountsTotpFilter() {
+  const el = $('#totpStatusFilter');
+  return (el ? el.value : '').trim();
+}
 async function loadAccounts() {
   if (accountsLoading) return;
   accountsLoading = true;
@@ -1222,9 +1250,10 @@ async function loadAccounts() {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -1247,9 +1276,10 @@ async function pollAccountPlanStatuses(forceMerge = false) {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -2483,7 +2513,7 @@ async function checkSelectedLive(idsArg = null, btnArg = null) {
 并发线程数：${workers}`;
   if (!confirm(msg)) return;
   const firstAcc = ACCOUNTS.find(a => Number(a.id) === Number(ids[0]));
-  const btn = btnArg || $('#btnCheckSelectedLive') || $('#btnCheckSelectedLiveTop');
+  const btn = btnArg || $('#btnCheckSelectedLive');
   const old = btn ? btn.textContent : '';
   if (btn) {
     btn.disabled = true;
@@ -2711,6 +2741,7 @@ async function retrySelectedCodex() {
 
 $('#qAccounts').addEventListener('input', debounce(() => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); }, 250));
 $('#codexStatusFilter').addEventListener('change', () => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); });
+$('#totpStatusFilter').addEventListener('change', () => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); });
 $('#copyAllTokens').addEventListener('click', async () => {
   const ids = ACCOUNTS.filter(r => r.has_access_token).map(r => Number(r.id));
   if (!ids.length) { showToast('当前页没有 Token'); return; }
@@ -2960,7 +2991,7 @@ function renderCodex() {
       <td class="muted">${esc(r.mtime || '-')}</td>
       <td class="muted">${esc(r.expired || '-')}</td>
       <td class="actions">
-        <button class="primary" data-codex-download="${esc(r.filename)}" title="下载本地 codex_accounts/ 中的 JSON/回执">本地下载</button>
+        <button class="primary" data-codex-download="${esc(r.filename)}" title="从 SQLite 下载 JSON/回执">下载凭证</button>
         <button class="good" data-codex-download-cpa="${esc(r.filename)}" title="按邮箱从 CPA auth-files 下载真实 Codex JSON">从CPA下载</button>
         ${exported ? `<button data-codex-reset="${esc(r.filename)}" title="重新标记为未导出">重置标记</button>` : ''}
         <button class="danger" data-codex-delete="${esc(r.filename)}" title="删除本地 Codex JSON 凭证文件">删除</button>
@@ -3080,7 +3111,7 @@ $('#btnCodexDownloadBulkCpa').addEventListener('click', async () => {
 $('#btnCodexDeleteBulk').addEventListener('click', async () => {
   if (CODEX_SELECTED.size === 0) return;
   const filenames = Array.from(CODEX_SELECTED);
-  if (!confirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除本地 codex_accounts/ 下的 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
+  if (!confirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除 SQLite 中的凭证记录。此操作不可撤销。`)) return;
   $('#btnCodexDeleteBulk').disabled = true;
   try {
     const r = await api('/api/codex/delete-bulk', {
@@ -3192,11 +3223,26 @@ function renderConfigField(f) {
     const ph = f.secret ? '保存在 .env，可留空' : '可留空';
     html += `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
-  return html + `</label>`;
+  const field = html + `</label>`;
+  return f.external_url
+    ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
+    : field;
+}
+
+function renderConfigExternalLink(f) {
+  const url = String(f.external_url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return '';
+  const label = String(f.external_label || '打开官网');
+  return `<a class="config-external-link" href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
 }
 
 function configSubhead(title, help = '') {
-  return `<div class="config-subhead">${esc(title)}${help ? `<span class="hint">${esc(help)}</span>` : ''}</div>`;
+  const subheadClass = title === 'Remail' ? 'config-subhead remail-subhead' : 'config-subhead';
+  const titleHtml = title === 'Remail' ? `<div class="remail-subhead-title">${esc(title)}</div>` : esc(title);
+  const promo = title === 'Remail'
+    ? `<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>`
+    : '';
+  return `<div class="${subheadClass}">${titleHtml}${help ? `<span class="hint">${esc(help)}</span>` : ''}${promo}</div>`;
 }
 
 function emailConfigSectionForKey(key) {
@@ -3206,6 +3252,7 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['Cloudflare 域名邮箱', 'Cloudflare 转发到 QQ 邮箱后的 IMAP 收信配置'];
   return ['其他邮箱配置', ''];
@@ -3276,7 +3323,7 @@ function renderConfigFields(fields) {
       CONFIG_EMAIL_ACTIVE_SECTION,
       v => { CONFIG_EMAIL_ACTIVE_SECTION = v; },
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       'email-config-section'
     );
   }

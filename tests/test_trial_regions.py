@@ -133,7 +133,7 @@ class TrialRegionDbTests(unittest.TestCase):
                 ))
                 account = db.get_account(account_id)
                 account["trial_check_queued_at"] = "2000-01-01T00:00:00"
-                db._write_json(db._ACCOUNTS_JSON, [account])
+                db._save_accounts([account])
 
                 self.assertTrue(db.claim_account_trial_check(
                     acc_id=account_id,

@@ -8,11 +8,12 @@ import string
 import time
 import uuid
 from pathlib import Path
+from typing import Callable
 
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
-from core.email_provider import wait_for_otp, resolve_email_source
+from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.openai_auth import AccountUnusableError, detect_account_unusable_text
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
@@ -809,16 +810,15 @@ def _click_email_entry_option(driver) -> bool:
     return False
 
 
-def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
-    """进入邮箱登录/注册方式并填写邮箱。全程不依赖页面可见文字，避免非日本出口本地化后误点 Google。"""
+def _wait_for_email_input(driver, timeout: int | None = None):
+    """进入邮箱登录/注册方式并返回已找到的可见邮箱输入框。"""
     end = time.time() + (timeout or int(_cfg.ROXY_SELENIUM_TIMEOUT))
     last_state = None
     clicked_email_option = False
     while time.time() < end:
         el = _find_visible_email_input_js(driver)
         if el:
-            _human_type_text(driver, el, email, clear=True)
-            return
+            return el
         last_state = _email_entry_state(driver)
         if not clicked_email_option and _click_email_entry_option(driver):
             clicked_email_option = True
@@ -827,6 +827,12 @@ def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
             continue
         time.sleep(0.4)
     raise RuntimeError(f"找不到邮箱输入框/邮箱入口（未使用文字识别），state={last_state}")
+
+
+def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
+    """进入邮箱登录/注册方式并填写邮箱。全程不依赖页面可见文字。"""
+    el = _wait_for_email_input(driver, timeout=timeout)
+    _human_type_text(driver, el, email, clear=True)
 
 
 def _submit_nearest_form_for_active_input(driver) -> bool:
@@ -1305,23 +1311,39 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     return "email_page" if _is_email_login_page_still_present(driver) else "unknown"
 
 
-def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
+def _submit_email_and_wait_next(
+    driver,
+    email: str | None,
+    attempts: int = 3,
+    email_supplier: Callable[[], str] | None = None,
+) -> str:
     """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
     last_state = None
+    current_email = str(email or "").strip()
     for attempt in range(1, attempts + 1):
-        _type_email_address(driver, email, timeout=20)
+        if current_email:
+            _type_email_address(driver, current_email, timeout=20)
+        else:
+            # 先确认页面已有可用输入框，再领取邮箱；不能把领取动作放在页面导航之前。
+            email_input = _wait_for_email_input(driver, timeout=20)
+            if email_supplier is None:
+                raise RuntimeError("已找到邮箱输入框，但未提供邮箱分配器")
+            current_email = str(email_supplier() or "").strip()
+            if not current_email:
+                raise RuntimeError("邮箱分配器返回了空邮箱地址")
+            _human_type_text(driver, email_input, current_email, clear=True)
         state = _email_input_value_state(driver)
         last_state = state
         values = [str(i.get("value") or "") for i in (state.get("inputs") or [])]
-        if not any(v.strip().lower() == email.strip().lower() for v in values):
+        if not any(v.strip().lower() == current_email.lower() for v in values):
             logger.warning("%s 邮箱写入校验失败，准备重试：attempt=%s/%s state=%s", _log_prefix(driver), attempt, attempts, state)
             time.sleep(0.8)
             continue
-        logger.info("%s 已填写邮箱并校验通过：%s", _log_prefix(driver), email)
+        logger.info("%s 已填写邮箱并校验通过：%s", _log_prefix(driver), current_email)
         human_delay("form")
-        _submit_email_step(driver, email)
+        _submit_email_step(driver, current_email)
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
-        state_name = _wait_email_submit_next_state(driver, email, timeout=20)
+        state_name = _wait_email_submit_next_state(driver, current_email, timeout=20)
         if state_name == "login_password":
             result = _click_passwordless_signup_if_present(driver)
             if result.get("ok"):
@@ -2562,7 +2584,15 @@ def _check_manual_stop() -> None:
         return
 
 
-def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
+def run_roxy_registration(
+    email: str | None,
+    name: str,
+    birthday: str,
+    proxy: str = None,
+    otp_code: str = None,
+    batch_dir: Path | None = None,
+    on_email_acquired: Callable[[str], None] | None = None,
+) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     client = RoxyBrowserClient()
     opened = client.open_profile()
@@ -2609,7 +2639,20 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
 
         # 填邮箱。OpenAI UI 会随出口 IP/语言变化；这里只按 DOM 技术属性找邮箱入口，
         # 并排除 Google/Apple/Microsoft 等第三方入口，不依赖按钮可见文字。
-        next_state = _submit_email_and_wait_next(driver, email, attempts=3)
+        def _email_supplier_after_input() -> str:
+            nonlocal email
+            _check_manual_stop()
+            email = acquire_email_after_input(email)
+            if on_email_acquired:
+                on_email_acquired(email)
+            return email
+
+        next_state = _submit_email_and_wait_next(
+            driver,
+            email,
+            attempts=3,
+            email_supplier=_email_supplier_after_input,
+        )
         _check_manual_stop()
         first_otp_after_ts = _last_email_otp_trigger_ts(driver, otp_after_ts)
         logger.info("[Roxy注册][OTP] 首轮取码起点锁定为邮箱提交时间：%.3f", first_otp_after_ts)
