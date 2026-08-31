@@ -31,6 +31,8 @@ _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
 _GENERIC_API_EMAIL_JSON = _PROJECT_ROOT / "用于注册的API邮箱.json"
 _GENERIC_API_EMAIL_TXT = _PROJECT_ROOT / "用于注册的API邮箱.txt"
+_REBIND_EMAIL_JSON = _PROJECT_ROOT / "用于换绑的邮箱.json"
+_REBIND_EMAIL_TXT = _PROJECT_ROOT / "用于换绑的邮箱.txt"
 _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
 _TOKENS_TXT = _PROJECT_ROOT / "注册成功的token.txt"
@@ -52,9 +54,10 @@ _TABLES = {
     "jobs": "registration_jobs",
     "domain": "email_pool",
     "codex": "codex_accounts",
+    "rebind": "email_pool",
 }
-_EMAIL_SOURCES = {"outlook": "outlook", "generic_api": "generic_api", "domain": "cloudflare_domain"}
-_LEGACY_TABLES = {"outlook": "outlook_pool", "generic_api": "generic_api_pool", "domain": "domain_email_pool"}
+_EMAIL_SOURCES = {"outlook": "outlook", "generic_api": "generic_api", "domain": "cloudflare_domain", "rebind": "rebind_email"}
+_LEGACY_TABLES = {"outlook": "outlook_pool", "generic_api": "generic_api_pool", "domain": "domain_email_pool", "rebind": "rebind_email_pool"}
 
 _LEGACY_SQLITE = _LEGACY_DATA_DIR / "registrations.db"
 _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
@@ -184,6 +187,7 @@ def _ensure_sqlite() -> None:
                 "generic_api": (_GENERIC_API_EMAIL_JSON,),
                 "jobs": (_JOBS_JSON, _LEGACY_JOBS_JSON),
                 "domain": (_DOMAIN_EMAIL_JSON,),
+                "rebind": (_REBIND_EMAIL_JSON,),
             }
             for collection, paths in sources.items():
                 table = _TABLES[collection]
@@ -321,12 +325,23 @@ def _save_collection(collection: str, rows: list[dict]) -> None:
                 if table == "email_pool" and conn.execute("SELECT 1 FROM email_pool WHERE id=?", (rid,)).fetchone():
                     rid = int(conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM email_pool").fetchone()[0])
                     row["id"] = rid
-                conn.execute(
-                    f"INSERT INTO {table}(id,email,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?)",
-                    (rid, str(row.get("email") or ""), str(row.get("status") or ""),
-                     int(bool(row.get("archived"))), str(row.get("created_at") or row.get("imported_at") or ""),
-                     str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
-                )
+                if table == "email_pool":
+                    # email_pool 表按 source 区分邮箱池，运行时写入必须带上，
+                    # 否则保存后按 source 查询会读到空池。
+                    conn.execute(
+                        f"INSERT INTO {table}(id,email,source,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?,?)",
+                        (rid, str(row.get("email") or ""), _EMAIL_SOURCES[collection],
+                         str(row.get("status") or ""), int(bool(row.get("archived"))),
+                         str(row.get("created_at") or row.get("imported_at") or ""),
+                         str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
+                    )
+                else:
+                    conn.execute(
+                        f"INSERT INTO {table}(id,email,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?)",
+                        (rid, str(row.get("email") or ""), str(row.get("status") or ""),
+                         int(bool(row.get("archived"))), str(row.get("created_at") or row.get("imported_at") or ""),
+                         str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
+                    )
 
 
 def _query_collection(collection: str, *, status: str | None = None, archived: str | bool | None = None,
@@ -2924,6 +2939,124 @@ def mark_account_live_check_running(acc_id: int) -> bool:
         return True
 
 
+def claim_account_rebind(acc_id: int, source: str = "pool") -> bool:
+    """原子占用账号换绑任务；已有 queued/running 时返回 False。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        if row.get("rebind_status") in {"queued", "running"}:
+            try:
+                stamp_key = "rebind_queued_at" if row.get("rebind_status") == "queued" else "rebind_started_at"
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < _PLAN_CHECK_QUEUE_STALE_SECONDS:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row["rebind_status"] = "queued"
+        row["rebind_source"] = str(source or "pool")
+        row["rebind_old_email"] = None
+        row["rebind_new_email"] = None
+        row["rebind_queued_at"] = now
+        row["rebind_started_at"] = None
+        row["rebind_finished_at"] = None
+        row["rebind_error"] = None
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
+def mark_account_rebind_running(acc_id: int, new_email: str | None = None) -> bool:
+    """把账号换绑任务标记为运行中；new_email 为本次领取到的换绑邮箱。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("rebind_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row["rebind_status"] = "running"
+        row["rebind_started_at"] = now
+        row["rebind_error"] = None
+        if new_email:
+            row["rebind_new_email"] = new_email
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
+def update_account_rebind(acc_id: int, result: dict | None = None) -> bool:
+    """
+    写回账号换绑结果。
+
+    成功：账号 email 换成新邮箱，刷新最新 access_token 与账号基础信息，
+          original_email_line 换成新邮箱素材行（CloudMail 为纯邮箱），
+          旧邮箱保留在 rebind_old_email。
+    失败：只写 rebind_status/错误信息；若换绑已在 OpenAI 侧生效
+          （result.rebind_effective=True），同时把账号 email 换成新邮箱。
+    """
+    result = result or {}
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+
+        now = _now()
+        ok = bool(result.get("ok"))
+        row["rebind_status"] = "success" if ok else "failed"
+        row["rebind_finished_at"] = result.get("completed_at") or now
+        row["rebind_error"] = None if ok else result.get("error")
+        row["updated_at"] = now
+
+        new_email = str(result.get("new_email") or row.get("rebind_new_email") or "").strip()
+        if new_email and (ok or bool(result.get("rebind_effective"))):
+            row["rebind_old_email"] = row.get("rebind_old_email") or row.get("email")
+            row["email"] = new_email
+            token = str(result.get("access_token") or "").strip()
+            if token:
+                row["access_token"] = token
+            material_line = str(result.get("new_email_line") or "").strip()
+            row["original_email_line"] = material_line or new_email
+            session = result.get("session") or {}
+            user = session.get("user") or {}
+            account = session.get("account") or {}
+            if user.get("id"):
+                row["user_id"] = user.get("id")
+            if user.get("name") is not None:
+                row["user_name"] = user.get("name")
+            if account.get("planType"):
+                row["plan_type"] = account.get("planType")
+            if session.get("expires"):
+                row["expires_at"] = session.get("expires")
+            if result.get("device_id"):
+                row["device_id"] = result.get("device_id")
+
+        row["copy_line"] = _account_line(row)
+        _save_accounts(rows)
+        return True
+
+
+def recover_interrupted_rebinds() -> int:
+    """服务启动时恢复上次进程中断的换绑状态，避免 queued/running 卡死。"""
+    with _LOCK:
+        rows = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in rows:
+            if row.get("rebind_status") not in {"queued", "running"}:
+                continue
+            row["rebind_status"] = "failed"
+            row["rebind_error"] = "WebUI 重启或任务异常中断，请重新换绑"
+            row["rebind_finished_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(rows)
+        return recovered
+
+
 def update_accounts_note(account_ids: list[int] | None, note: str) -> tuple[list[dict], list[dict]]:
     """
     批量更新已注册账号备注。
@@ -3425,6 +3558,167 @@ def get_generic_api_email_by_email(email: str) -> dict | None:
     with _LOCK:
         row = _find_by_email(_load_generic_api_emails(), email)
         return _decorate_generic_api_email(row) if row else None
+
+
+# ============================================================
+# 换绑邮箱池（给账号换绑用的新邮箱素材）
+# 行格式与邮箱池一致：generic_api -> email----code_url；cloudmail -> email
+# ============================================================
+
+def _rebind_email_line(row: dict) -> str:
+    kind = str(row.get("kind") or "generic_api")
+    if kind == "cloudmail":
+        return row.get("email") or ""
+    return "----".join([
+        row.get("email") or "",
+        row.get("code_url") or "",
+    ])
+
+
+def _load_rebind_emails() -> list[dict]:
+    return _load_collection("rebind")
+
+
+def _save_rebind_emails(rows: list[dict]) -> None:
+    for row in rows:
+        row["copy_line"] = _rebind_email_line(row)
+    _save_collection("rebind", rows)
+
+
+def _decorate_rebind_email(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
+    out = dict(row)
+    out["kind"] = out.get("kind") or "generic_api"
+    out["copy_line"] = _rebind_email_line(out)
+    account = None
+    if account_by_email is not None:
+        account = account_by_email.get((out.get("email") or "").lower())
+    if account:
+        out["bound_account_id"] = account.get("id")
+        out["bound_account_old_email"] = account.get("rebind_old_email")
+    return out
+
+
+def import_rebind_emails(records: list[dict]) -> tuple[int, int]:
+    """
+    批量导入换绑邮箱池。
+    records 元素：{email, code_url?, kind?}；kind ∈ generic_api / cloudmail。
+    返回 (新增数, 跳过数)。
+    """
+    with _LOCK:
+        rows = _load_rebind_emails()
+        inserted = skipped = 0
+        for raw in records:
+            email = (raw.get("email") or "").strip()
+            code_url = (raw.get("code_url") or raw.get("url") or "").strip()
+            kind = (raw.get("kind") or ("cloudmail" if not code_url else "generic_api")).strip()
+            if kind not in ("generic_api", "cloudmail"):
+                kind = "generic_api"
+            if not email or (kind == "generic_api" and not code_url):
+                skipped += 1
+                continue
+            if _find_by_email(rows, email):
+                skipped += 1
+                continue
+            row = {
+                "id": _next_id(rows),
+                "email": email,
+                "code_url": code_url if kind == "generic_api" else "",
+                "kind": kind,
+                "status": "available",
+                "used_at": None,
+                "note": None,
+                "imported_at": _now(),
+            }
+            row["copy_line"] = _rebind_email_line(row)
+            rows.append(row)
+            inserted += 1
+        if inserted:
+            _save_rebind_emails(rows)
+        return inserted, skipped
+
+
+def claim_rebind_email(kind: str | None = None) -> dict | None:
+    """原子领取一个可用换绑邮箱并标记为 used；kind 可限定 generic_api / cloudmail。"""
+    with _LOCK:
+        rows = sorted(_load_rebind_emails(), key=lambda x: int(x.get("id") or 0))
+        row = next(
+            (r for r in rows if r.get("status") == "available" and (not kind or r.get("kind") == kind)),
+            None,
+        )
+        if row is None:
+            return None
+        row["status"] = "used"
+        row["used_at"] = _now()
+        row["note"] = None
+        _save_rebind_emails(rows)
+        return _decorate_rebind_email(row)
+
+
+def release_rebind_email(email: str, status: str = "available", note: str | None = None) -> None:
+    """把换绑邮箱状态改回 available，或标记为 used/failed/disabled。"""
+    with _LOCK:
+        rows = _load_rebind_emails()
+        row = _find_by_email(rows, email)
+        if row is None:
+            return
+        row["status"] = status
+        if status == "available":
+            row["used_at"] = None
+        elif status in ("used", "failed", "disabled"):
+            row["used_at"] = row.get("used_at") or _now()
+        if note is not None:
+            row["note"] = note
+        _save_rebind_emails(rows)
+
+
+def delete_rebind_email(email: str) -> bool:
+    """从换绑邮箱池彻底删除一个邮箱。"""
+    with _LOCK:
+        rows = _load_rebind_emails()
+        target = (email or "").lower()
+        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
+        if len(new_rows) == len(rows):
+            return False
+        _save_rebind_emails(new_rows)
+        return True
+
+
+def list_rebind_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
+    with _LOCK:
+        account_by_email = {
+            (a.get("email") or "").lower(): a
+            for a in _load_accounts()
+        }
+        rows = _load_rebind_emails()
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
+        return [_decorate_rebind_email(r, account_by_email) for r in rows[:limit]]
+
+
+def rebind_email_pool_summary() -> dict:
+    with _LOCK:
+        out = {"available": 0, "used": 0, "failed": 0}
+        for row in _load_rebind_emails():
+            status = row.get("status") or "available"
+            out[status] = out.get(status, 0) + 1
+        out["total"] = sum(v for k, v in out.items() if k != "total")
+        return out
+
+
+def get_rebind_email_by_email(email: str) -> dict | None:
+    with _LOCK:
+        row = _find_by_email(_load_rebind_emails(), email)
+        return _decorate_rebind_email(row) if row else None
+
+
+def count_rebind_emails_available(kind: str | None = None) -> int:
+    with _LOCK:
+        rows = _load_rebind_emails()
+        return sum(
+            1 for r in rows
+            if r.get("status") == "available" and (not kind or r.get("kind") == kind)
+        )
 
 
 # ============================================================

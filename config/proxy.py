@@ -57,12 +57,13 @@ TRIAL_JP_PROXY_POOL: list[str] = []
 # 查 GB 试用资格专用代理池（GB 出口），与 JP 池隔离，单独轮换。格式同上。
 TRIAL_GB_PROXY_POOL: list[str] = []
 
-# 查 DE/BR/TH/PH/ID 试用资格的地区专用代理池，彼此及支付检测池完全隔离。格式同上。
+# 查 DE/BR/TH/PH/ID/VN 试用资格的地区专用代理池，彼此及支付检测池完全隔离。格式同上。
 TRIAL_DE_PROXY_POOL: list[str] = []
 TRIAL_BR_PROXY_POOL: list[str] = []
 TRIAL_TH_PROXY_POOL: list[str] = []
 TRIAL_PH_PROXY_POOL: list[str] = []
 TRIAL_ID_PROXY_POOL: list[str] = []
+TRIAL_VN_PROXY_POOL: list[str] = []
 
 # GCash 检测：PH/PHP 返回 OpenAI 自定义结账（oaics_），GCash 只出现在
 # custom_payment_methods（cpmt_*），不在 payment_method_types 里。
@@ -115,7 +116,7 @@ PLAN_CHECK_QUEUE_LIMIT = 500
 PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
-# 查试用资格（JP/GB/DE/BR/TH/PH）后台队列参数，与套餐查询队列隔离。
+# 查试用资格（JP/GB/DE/BR/TH/PH/VN）后台队列参数，与套餐查询队列隔离。
 # 请求超时/重试沿用 PLAN_CHECK_TIMEOUT / PLAN_CHECK_MAX_ATTEMPTS / PLAN_CHECK_RETRY_DELAY。
 TRIAL_CHECK_WORKERS = 3
 TRIAL_CHECK_QUEUE_LIMIT = 200
@@ -300,6 +301,7 @@ apply_env_overrides(globals(), {
     'TRIAL_TH_PROXY_POOL': 'list_str_multiline',
     'TRIAL_PH_PROXY_POOL': 'list_str_multiline',
     'TRIAL_ID_PROXY_POOL': 'list_str_multiline',
+    'TRIAL_VN_PROXY_POOL': 'list_str_multiline',
     'GOPAY_CUSTOM_PAYMENT_METHOD_IDS': 'list_str_multiline',
     'MOMO_CHECK_TIMEOUT': 'float',
     'MOMO_CHECK_MAX_ATTEMPTS': 'int',

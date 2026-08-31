@@ -22,7 +22,7 @@ from webui.app import _compact_account_for_list, create_app
 
 class TrialRegionRegistryTests(unittest.TestCase):
     def test_registry_contains_all_supported_regions(self):
-        self.assertEqual(TRIAL_REGIONS, ("jp", "gb", "de", "br", "th", "ph", "id"))
+        self.assertEqual(TRIAL_REGIONS, ("jp", "gb", "de", "br", "th", "ph", "id", "vn"))
         self.assertEqual(
             TRIAL_PROXY_POOL_NAMES,
             {region: f"TRIAL_{region.upper()}_PROXY_POOL" for region in TRIAL_REGIONS},
@@ -105,6 +105,8 @@ class TrialRegionRegistryTests(unittest.TestCase):
         self.assertEqual(trial_timezone_offset_min("gb", summer), "-60")
         self.assertEqual(trial_timezone_offset_min("de", winter), "-60")
         self.assertEqual(trial_timezone_offset_min("de", summer), "-120")
+        self.assertEqual(trial_timezone_offset_min("vn", winter), "-420")
+        self.assertEqual(trial_timezone_offset_min("vn", summer), "-420")
 
 
 class TrialRegionDbTests(unittest.TestCase):
