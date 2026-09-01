@@ -12,6 +12,7 @@ Remail 的开放 API 与本项目已有的“生成随机邮箱”类服务不�
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -19,6 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -27,6 +29,8 @@ from config import email as _email_cfg
 from core.otp_utils import extract_otp
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_API_BASE = "https://remail.aishop6.com"
 REQUEST_TIMEOUT = 20
@@ -285,8 +289,122 @@ def _wait_for_order_credentials(order: dict) -> tuple[str, str, str]:
     raise RemailError(f"Remail 订单等待 service token 超时: order={order_no}, status={status}")
 
 
+# ---- 失败邮箱复用队列 -------------------------------------------------
+#
+# 注册失败但订单仍在服务端有效的邮箱，把 {email, order_no} 写入项目根
+# remail_reuse_queue.json；后续 pick_account 优先按订单号恢复取件上下文
+# （service token 只存在服务端订单里，进程重启后必须按订单号取回），
+# 复用完队列再恢复正常下单。
+
+_REUSE_QUEUE_PATH = _PROJECT_ROOT / "remail_reuse_queue.json"
+_REUSE_QUEUE_LOCK = threading.Lock()
+
+
+def _load_reuse_queue() -> list[dict]:
+    try:
+        data = json.loads(_REUSE_QUEUE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        logger.warning("[Remail] 复用队列读取失败，按空队列处理：%s", exc)
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_reuse_queue(items: list[dict]) -> None:
+    try:
+        _REUSE_QUEUE_PATH.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("[Remail] 复用队列写入失败：%s", exc)
+
+
+def restore_order_context(order_no: str, email_hint: str = "") -> RemailAccount | None:
+    """按订单号重建取件上下文；订单已失效/查询不到时返回 None。"""
+    no = str(order_no or "").strip()
+    if not no:
+        return None
+    try:
+        order = _unwrap_order(_request("GET", f"/v1/open/orders/{no}"))
+    except RemailError as exc:
+        logger.warning("[Remail] 复用订单 %s 查询失败：%s", no, str(exc)[:160])
+        return None
+    except Exception as exc:
+        logger.warning("[Remail] 复用订单 %s 查询异常：%s: %s", no, type(exc).__name__, str(exc)[:160])
+        return None
+    credentials = _order_credentials(order)
+    if not credentials:
+        logger.warning(
+            "[Remail] 复用订单 %s 不可用（缺少 service token，status=%s）",
+            no,
+            str(order.get("status") or "unknown"),
+        )
+        return None
+    email, token, resolved_no = credentials
+    if email_hint and email_hint.lower() != email.lower():
+        logger.info("[Remail] 订单 %s 交付邮箱与记录不一致：记录=%s 实际=%s（以服务端为准）", no, email_hint, email)
+    account = RemailAccount(
+        email=email,
+        service_token=token,
+        order_no=resolved_no or no,
+        project_id=_project_id(),
+        email_suffix=_email_suffix(),
+    )
+    with _CONTEXT_LOCK:
+        _CONTEXT_CACHE[_cache_key(email)] = account
+    logger.info("[Remail] 已按订单恢复取件上下文：%s order=%s", email, account.order_no)
+    return account
+
+
+def _pop_reuse_account() -> RemailAccount | None:
+    """从复用队列弹出一个可用的失败邮箱；恢复失败的条目重试一次后淘汰。"""
+    try:
+        enabled = bool(getattr(_email_cfg, "REMAIL_REUSE_FAILED_EMAILS", False))
+    except Exception:
+        enabled = False
+    if not enabled:
+        return None
+    with _REUSE_QUEUE_LOCK:
+        queue = _load_reuse_queue()
+        while queue:
+            entry = queue.pop(0)
+            try:
+                attempts = int(entry.get("attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+            if attempts >= 2:
+                logger.warning(
+                    "[Remail] 复用条目多次恢复失败，已丢弃：%s order=%s",
+                    entry.get("email") or "-",
+                    entry.get("order_no") or "-",
+                )
+                _save_reuse_queue(queue)
+                continue
+            account = restore_order_context(str(entry.get("order_no") or ""), str(entry.get("email") or ""))
+            if account is not None:
+                _save_reuse_queue(queue)
+                return account
+            # 恢复失败可能是网络抖动，也可能是订单已失效；记一次失败放回队列，
+            # 留给下一次注册再试，累计两次失败即淘汰，避免坏条目长期占位。
+            entry["attempts"] = attempts + 1
+            queue.append(entry)
+            _save_reuse_queue(queue)
+            break
+    return None
+
+
 def pick_account() -> RemailAccount:
-    """按配置创建一个 Remail 接码/长效购买订单并返回交付邮箱。"""
+    """按配置创建一个 Remail 接码/长效购买订单并返回交付邮箱。
+
+    项目根存在 remail_reuse_queue.json（失败邮箱复用队列）时，优先按订单号
+    恢复队列中邮箱的取件上下文并复用；队列清空后恢复正常下单。
+    """
+    reused = _pop_reuse_account()
+    if reused is not None:
+        logger.info("[Remail] 复用队列命中，使用已有邮箱：%s order=%s", reused.email, reused.order_no or "-")
+        return reused
     project_id = _project_id()
     email_suffix = _email_suffix()
     service_mode = _service_mode()
@@ -325,11 +443,39 @@ def get_account_context(email: str) -> RemailAccount | None:
         return _CONTEXT_CACHE.get(_cache_key(email))
 
 
+def _requeue_account(account: RemailAccount, note: str | None = None) -> None:
+    """把可重试失败的已领取订单放回队首，供下一次注册优先恢复。"""
+    if not account.order_no:
+        return
+    entry = {
+        "email": account.email,
+        "order_no": account.order_no,
+        "attempts": 0,
+    }
+    with _REUSE_QUEUE_LOCK:
+        queue = _load_reuse_queue()
+        queue = [
+            item for item in queue
+            if str(item.get("order_no") or "").strip() != account.order_no
+            and _cache_key(str(item.get("email") or "")) != _cache_key(account.email)
+        ]
+        queue.insert(0, entry)
+        _save_reuse_queue(queue)
+    logger.info(
+        "[Remail] 已把可重试订单放回复用队列首位：%s order=%s note=%s",
+        account.email,
+        account.order_no,
+        note or "",
+    )
+
+
 def release_account(email: str, status: str = "available", note: str | None = None) -> None:
-    """释放本地取件上下文；订单生命周期由 Remail 服务端管理。"""
+    """释放本地取件上下文；可重试失败的订单会重新进入复用队列。"""
     with _CONTEXT_LOCK:
         account = _CONTEXT_CACHE.pop(_cache_key(email), None)
     if account:
+        if str(status or "").strip().lower() == "available":
+            _requeue_account(account, note=note)
         logger.info(
             "[Remail] 已释放取件上下文: %s order=%s status=%s note=%s",
             email,

@@ -171,8 +171,19 @@ def _safe_get(driver, url: str, *, timeout: int = 45, attempts: int = 2, accept_
         except WebDriverException as exc:
             last_exc = exc
             if attempt < attempts:
-                logger.warning("%s 页面跳转失败，准备重试：url=%s attempt=%s/%s error=%s", _log_prefix(driver), url, attempt, attempts, exc)
-                time.sleep(1.5 * attempt)
+                if _is_timeout_like_error(exc):
+                    # net::ERR_* / renderer 超时等多为代理闪断或网络抖动，
+                    # 立刻重试往往还是失败，退避久一点等网络恢复。
+                    backoff = min(2.5 * attempt, 6.0)
+                    logger.warning(
+                        "%s 页面跳转遇到网络/超时类错误，%.1fs 后重试：url=%s attempt=%s/%s error=%s",
+                        _log_prefix(driver), backoff, url, attempt, attempts,
+                        str(exc).splitlines()[0] if str(exc) else "WebDriverException",
+                    )
+                else:
+                    backoff = 1.5 * attempt
+                    logger.warning("%s 页面跳转失败，准备重试：url=%s attempt=%s/%s error=%s", _log_prefix(driver), url, attempt, attempts, exc)
+                time.sleep(backoff)
                 continue
             raise
         finally:
@@ -181,6 +192,73 @@ def _safe_get(driver, url: str, *, timeout: int = 45, attempts: int = 2, accept_
             except Exception:
                 pass
     raise last_exc or RuntimeError(f"页面跳转失败: {url}")
+
+
+# 网络抖动/代理闪断时 Selenium/Chromium 抛出的典型错误文案片段（小写匹配）。
+_NETWORK_TIMEOUT_HINTS = (
+    "net::err_",                             # ERR_SOCKS_CONNECTION_FAILED / ERR_CONNECTION_* / ERR_PROXY_* 等
+    "timed out receiving message from renderer",
+    "script timeout",
+    "page load timeout",
+    "timeout",
+    "timed out",
+    "connection refused",
+    "connection reset",
+    "chrome not reachable",
+)
+
+
+def _is_timeout_like_error(exc: Exception | None) -> bool:
+    """判断异常是否属于超时/网络类错误，可安全地重试或刷新恢复。"""
+    if exc is None:
+        return False
+    try:
+        from selenium.common.exceptions import TimeoutException
+        if isinstance(exc, TimeoutException):
+            return True
+    except Exception:
+        pass
+    text = str(exc).lower()
+    return any(hint in text for hint in _NETWORK_TIMEOUT_HINTS)
+
+
+def _refresh_or_reopen(driver, fallback_url: str, *, timeout: int = 25, accept_hosts: tuple[str, ...] = ()) -> bool:
+    """刷新当前页面；刷新失败或页面已不可用时退回重新打开 fallback_url。
+
+    网络抖动后页面经常停在半加载状态，原地干等只会反复 script timeout；
+    刷新能重新触发页面自身的 session/OTP 逻辑，是比直接放弃更好的恢复手段。
+    """
+    prefix = _log_prefix(driver)
+    old_timeout = int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)
+    try:
+        try:
+            driver.set_page_load_timeout(max(15, int(timeout)))
+        except Exception:
+            pass
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+        driver.refresh()
+        try:
+            current = str(driver.current_url or "")
+        except Exception:
+            current = ""
+        logger.info("%s 已刷新当前页面等待恢复：url=%s", prefix, current[:180])
+        return True
+    except Exception as exc:
+        logger.warning("%s 刷新当前页面失败，准备重新打开 %s：%s", prefix, fallback_url, str(exc)[:180])
+    finally:
+        try:
+            driver.set_page_load_timeout(old_timeout)
+        except Exception:
+            pass
+    try:
+        _safe_get(driver, fallback_url, timeout=timeout, attempts=2, accept_hosts=accept_hosts)
+        return True
+    except Exception as exc:
+        logger.warning("%s 重新打开 %s 失败：%s", prefix, fallback_url, str(exc)[:180])
+        return False
 
 
 def _visible(el) -> bool:
@@ -717,7 +795,7 @@ def _request_email_otp_send_via_browser(driver, *, reason: str = "") -> dict:
                     driver,
                     "https://auth.openai.com/email-verification",
                     timeout=20,
-                    attempts=1,
+                    attempts=2,
                     accept_hosts=("auth.openai.com",),
                 )
                 time.sleep(1.0)
@@ -746,7 +824,7 @@ def _restart_email_otp_flow(driver, email: str, *, reason: str) -> tuple[float, 
         driver,
         "https://chatgpt.com/auth/login",
         timeout=min(45, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
-        attempts=2,
+        attempts=3,
         accept_hosts=("chatgpt.com", "auth.openai.com"),
     )
     human_delay("navigate")
@@ -1452,6 +1530,39 @@ def _is_email_verification_page(driver) -> bool:
 
 
 def _ensure_email_otp_ready(driver, email: str, timeout: int = 35, prefer_after_ts: float | None = None) -> float:
+    """等待 OTP 就绪；超时属于网络/加载类问题时刷新验证码页再重试。
+
+    网络慢时单轮 35s 预算经常被 12s 一次的 script timeout 和卡住的点击耗光，
+    页面实际停在半加载状态；刷新重开验证码页后再试一轮，比直接判死整个任务划算。
+    """
+    attempts = 3
+    last_exc: RuntimeError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _ensure_email_otp_ready_once(driver, email, timeout=timeout, prefer_after_ts=prefer_after_ts)
+        except RuntimeError as exc:
+            msg = str(exc)
+            # 只有等待超时值得刷新重试；会话失效/登录密码页是账号状态问题，重试无意义。
+            if "等待邮箱验证码输入框/发信入口超时" not in msg:
+                raise
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "%s[OTP] 等待验证码输入框/发信入口超时（%s/%s），刷新验证码页后重试：%s",
+                _log_prefix(driver), attempt, attempts, msg[:200],
+            )
+            if not _refresh_or_reopen(
+                driver,
+                "https://auth.openai.com/email-verification",
+                timeout=25,
+                accept_hosts=("auth.openai.com",),
+            ):
+                time.sleep(2.0)
+    raise last_exc or RuntimeError(f"等待邮箱验证码输入框/发信入口超时：email={email}")
+
+
+def _ensure_email_otp_ready_once(driver, email: str, timeout: int = 35, prefer_after_ts: float | None = None) -> float:
     """进入取码等待前，确认邮箱 OTP 流已经真实触发且输入框可用。
 
     只看到 /email-verification URL 或 OTP 输入框不足以证明邮件已发送；新版页面
@@ -2389,6 +2500,8 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
     today = date.today()
     age = today.year - int(y) - ((today.month, today.day) < (int(m), int(d)))
     last_snapshot = {}
+    stale_since: float | None = None
+    refreshes_done = 0
     while time.time() < end:
         time.sleep(1)
         if _has_access_token(driver):
@@ -2398,7 +2511,20 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
         last_snapshot = snap
         if not _is_profile_like(snap):
             logger.info('%s 等待资料页中：url=%s', _log_prefix(driver), snap.get('url'))
+            # OAuth 回跳/资料页长时间无进展多半是网络卡在半加载状态；刷新重新触发跳转。
+            now = time.time()
+            if stale_since is None:
+                stale_since = now
+            elif now - stale_since >= 30 and refreshes_done < 2:
+                refreshes_done += 1
+                stale_since = now
+                logger.warning(
+                    '%s 等待资料页/登录态超过 30s 无进展（url=%s），第 %s 次刷新页面重试',
+                    _log_prefix(driver), str(snap.get('url') or '')[:160], refreshes_done,
+                )
+                _refresh_or_reopen(driver, 'https://chatgpt.com/', timeout=35, accept_hosts=('chatgpt.com',))
             continue
+        stale_since = None
 
         logger.info('%s 检测到资料页，开始填写姓名生日：url=%s inputs=%s', _log_prefix(driver), snap.get('url'), snap.get('inputs'))
         name_ok = False
@@ -2540,6 +2666,8 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
     auto_jump_end = time.time() + max(3, int(auto_jump_wait or 15))
     last_data = None
     forced_chatgpt_open = False
+    stuck_since: float | None = None
+    refreshes_done = 0
 
     while time.time() < end:
         try:
@@ -2548,6 +2676,7 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
             current = ''
 
         if 'chatgpt.com' not in current:
+            stuck_since = None
             if _switch_to_chatgpt_window_if_any(driver):
                 current = str(getattr(driver, "current_url", "") or "")
             elif time.time() >= auto_jump_end and not forced_chatgpt_open:
@@ -2571,6 +2700,19 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 last_data = "session 暂无 accessToken"
             except Exception as exc:
                 last_data = f"{type(exc).__name__}: {exc}"
+            # 网络抖动时页面常停在半加载状态，继续原地轮询只会反复 script timeout；
+            # 持续拿不到 session 就刷新页面，重新触发 NextAuth 的 session 请求。
+            now = time.time()
+            if stuck_since is None:
+                stuck_since = now
+            elif now - stuck_since >= 30 and refreshes_done < 3:
+                refreshes_done += 1
+                stuck_since = now
+                logger.warning(
+                    "%s 持续拿不到 accessToken（%s），第 %s 次刷新页面重试",
+                    _log_prefix(driver), str(last_data)[:140], refreshes_done,
+                )
+                _refresh_or_reopen(driver, "https://chatgpt.com/", timeout=35, accept_hosts=("chatgpt.com",))
         time.sleep(2)
 
     raise RuntimeError(f"等待 /api/auth/session accessToken 超时，最后响应: {str(last_data)[:800]}")
@@ -2595,41 +2737,73 @@ def run_roxy_registration(
 ) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     client = RoxyBrowserClient()
-    opened = client.open_profile()
+    opened = None
     driver = None
     recorder = None
     create_acknowledged = False
     openai_password: str | None = None
+    registration_country = ""
     try:
-        driver = _build_driver(opened)
-        # 可选：通过 CDP 采集整个注册流程的 HAR + JS 指纹（ROXY_CAPTURE_HAR=True）。
-        # 采集是纯附加、可降级的，任何失败都不影响注册主流程。
-        try:
-            from core.cdp_har_recorder import start_har_recorder
-            recorder = start_har_recorder(opened, email)
-            if recorder is not None:
-                recorder.capture_js_fingerprint(driver)
-        except Exception as exc:
-            logger.warning("[Roxy注册] HAR 采集启动失败，本次不采集：%s", exc)
-        from core.registration_geo import detect_selenium_registration_country
-        registration_country = detect_selenium_registration_country(driver)
-        _center_browser_window(driver)
-        driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
-        try:
-            driver.set_script_timeout(12)
-        except Exception:
-            pass
-        logger.info("[Roxy注册] 开始：%s，profile=%s", email, opened.profile_id)
+        # 环境级重试：代理池是同一网关下的多个 sticky sid，某个 sid 闪断时
+        # 浏览器内重试救不回来（ERR_SOCKS_CONNECTION_FAILED 会连吃满所有次数）；
+        # 销毁环境换一个 sid 重建是唯一有效的恢复手段。此阶段尚未领取邮箱，
+        # 重建完全安全。
+        for env_attempt in range(1, 3):
+            opened = client.open_profile()
+            driver = _build_driver(opened)
+            # 可选：通过 CDP 采集整个注册流程的 HAR + JS 指纹（ROXY_CAPTURE_HAR=True）。
+            # 采集是纯附加、可降级的，任何失败都不影响注册主流程。
+            try:
+                from core.cdp_har_recorder import start_har_recorder
+                recorder = start_har_recorder(opened, email)
+                if recorder is not None:
+                    recorder.capture_js_fingerprint(driver)
+            except Exception as exc:
+                logger.warning("[Roxy注册] HAR 采集启动失败，本次不采集：%s", exc)
+            from core.registration_geo import detect_selenium_registration_country
+            registration_country = detect_selenium_registration_country(driver)
+            _center_browser_window(driver)
+            driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
+            try:
+                driver.set_script_timeout(12)
+            except Exception:
+                pass
+            logger.info("[Roxy注册] 开始：%s，profile=%s", email, opened.profile_id)
 
-        otp_after_ts = time.time()
-        logger.info("[Roxy注册] 打开登录页：https://chatgpt.com/auth/login")
-        _safe_get(
-            driver,
-            "https://chatgpt.com/auth/login",
-            timeout=min(45, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
-            attempts=2,
-            accept_hosts=("chatgpt.com", "auth.openai.com"),
-        )
+            otp_after_ts = time.time()
+            logger.info("[Roxy注册] 打开登录页：https://chatgpt.com/auth/login")
+            try:
+                _safe_get(
+                    driver,
+                    "https://chatgpt.com/auth/login",
+                    timeout=min(45, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
+                    attempts=3,
+                    accept_hosts=("chatgpt.com", "auth.openai.com"),
+                )
+                break
+            except Exception as exc:
+                if env_attempt < 2 and _is_timeout_like_error(exc):
+                    logger.warning(
+                        "[Roxy注册] 登录页打开失败（网络/代理不可用），销毁当前环境换代理重试（%s/2）：%s",
+                        env_attempt,
+                        str(exc).splitlines()[0] if str(exc) else type(exc).__name__,
+                    )
+                    if recorder is not None:
+                        try:
+                            recorder.stop(driver=driver)
+                        except Exception:
+                            pass
+                        recorder = None
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = None
+                    client.cleanup_profile(opened)
+                    opened = None
+                    time.sleep(3.0)
+                    continue
+                raise
         human_delay("navigate")
         _install_email_otp_send_probe(driver)
         _page_warmup(driver, reason="login_page")

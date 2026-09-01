@@ -22,13 +22,13 @@ class RemailClientTests(unittest.TestCase):
         }
         request.return_value = response
 
-        with patch.object(email_config, "REMAIL_API_BASE", "https://remail.aishop6.com/docs", create=True), patch.object(
-            email_config, "REMAIL_API_KEY", "rk-test-key", create=True
-        ), patch.object(email_config, "REMAIL_PROJECT_ID", 1001, create=True), patch.object(
-            email_config, "REMAIL_EMAIL_SUFFIX", "outlook.com", create=True
-        ), patch.object(email_config, "REMAIL_SERVICE_MODE", "code", create=True), patch.object(
-            email_config, "REMAIL_SUPPLY_POLICY", "private_first", create=True
-        ):
+        with patch.object(email_config, "REMAIL_REUSE_FAILED_EMAILS", False, create=True), patch.object(
+            email_config, "REMAIL_API_BASE", "https://remail.aishop6.com/docs", create=True
+        ), patch.object(email_config, "REMAIL_API_KEY", "rk-test-key", create=True), patch.object(
+            email_config, "REMAIL_PROJECT_ID", 1001, create=True
+        ), patch.object(email_config, "REMAIL_EMAIL_SUFFIX", "outlook.com", create=True), patch.object(
+            email_config, "REMAIL_SERVICE_MODE", "code", create=True
+        ), patch.object(email_config, "REMAIL_SUPPLY_POLICY", "private_first", create=True):
             account = remail_client.pick_account()
 
         self.assertEqual(account.email, "fresh@outlook.test")
@@ -59,11 +59,13 @@ class RemailClientTests(unittest.TestCase):
         }
         request.side_effect = [create_response, detail_response]
 
-        with patch.object(email_config, "REMAIL_API_KEY", "rk-test-key", create=True), patch.object(
-            email_config, "REMAIL_PROJECT_ID", 1001, create=True
-        ), patch.object(email_config, "REMAIL_EMAIL_SUFFIX", "outlook.com", create=True), patch.object(
-            email_config, "REMAIL_SERVICE_MODE", "code", create=True
-        ), patch.object(email_config, "REMAIL_ORDER_WAIT_SECONDS", 1, create=True):
+        with patch.object(email_config, "REMAIL_REUSE_FAILED_EMAILS", False, create=True), patch.object(
+            email_config, "REMAIL_API_KEY", "rk-test-key", create=True
+        ), patch.object(email_config, "REMAIL_PROJECT_ID", 1001, create=True), patch.object(
+            email_config, "REMAIL_EMAIL_SUFFIX", "outlook.com", create=True
+        ), patch.object(email_config, "REMAIL_SERVICE_MODE", "code", create=True), patch.object(
+            email_config, "REMAIL_ORDER_WAIT_SECONDS", 1, create=True
+        ):
             account = remail_client.pick_account()
 
         self.assertEqual(account.email, "fresh@outlook.test")

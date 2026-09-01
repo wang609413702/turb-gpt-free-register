@@ -498,7 +498,8 @@ class RegistrationDefaultRegionTests(unittest.TestCase):
     """注册后自动查试用资格使用「注册后默认查试用地区」配置。"""
 
     def test_default_trial_region_reads_config_with_fallback(self):
-        self.assertEqual(proxy_cfg.default_trial_region(), "jp")
+        with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "jp"):
+            self.assertEqual(proxy_cfg.default_trial_region(), "jp")
         with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "vn"):
             self.assertEqual(proxy_cfg.default_trial_region(), "vn")
         with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "XX"):
@@ -524,8 +525,10 @@ class RegistrationDefaultRegionTests(unittest.TestCase):
                 for item in self._save_patches(root):
                     stack.enter_context(item)
                 with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "de"), \
+                     patch("core.plan_check_service.enqueue_account_plan_check") as enqueue_plan, \
                      patch("core.trial_check_service.enqueue_account_trial_check") as enqueue_trial, \
                      patch("core.twofa_service.enqueue_account_totp_setup") as enqueue_totp:
+                    enqueue_plan.return_value = {"accepted": True}
                     enqueue_trial.return_value = {"accepted": True}
                     enqueue_totp.return_value = {"accepted": True}
                     row_id = save_account_data(email="de@example.com", access_token="tok")
@@ -543,8 +546,10 @@ class RegistrationDefaultRegionTests(unittest.TestCase):
                 for item in self._save_patches(root):
                     stack.enter_context(item)
                 with patch.object(proxy_cfg, "TRIAL_CHECK_DEFAULT_REGION", "nope"), \
+                     patch("core.plan_check_service.enqueue_account_plan_check") as enqueue_plan, \
                      patch("core.trial_check_service.enqueue_account_trial_check") as enqueue_trial, \
                      patch("core.twofa_service.enqueue_account_totp_setup") as enqueue_totp:
+                    enqueue_plan.return_value = {"accepted": True}
                     enqueue_trial.return_value = {"accepted": True}
                     enqueue_totp.return_value = {"accepted": True}
                     save_account_data(email="jp@example.com", access_token="tok")

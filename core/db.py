@@ -365,7 +365,8 @@ def _query_collection(collection: str, *, status: str | None = None, archived: s
     if date_to:
         value = str(date_to)
         where.append("created_at <= ?"); params.append(value + ("T23:59:59.999999" if len(value) == 10 else ""))
-    sql = f"SELECT payload FROM {table} WHERE " + " AND ".join(where) + " ORDER BY id DESC"
+    order_by = "created_at DESC, id DESC" if table == "accounts" else "id DESC"
+    sql = f"SELECT payload FROM {table} WHERE " + " AND ".join(where) + f" ORDER BY {order_by}"
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"; params.extend([max(0, int(limit)), max(0, int(offset))])
     with closing(_sqlite_conn()) as conn:
@@ -401,11 +402,12 @@ def _query_collection_page(collection: str, *, status: str | None = None,
         where.extend(extra_where)
         params.extend(extra_params or [])
     clause = " AND ".join(where)
+    order_by = "created_at DESC, id DESC" if table == "accounts" else "id DESC"
     with closing(_sqlite_conn()) as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {clause}", params).fetchone()[0])
         latest = str(conn.execute(f"SELECT COALESCE(MAX(updated_at), '') FROM {table} WHERE {clause}", params).fetchone()[0] or "")
         rows = [json.loads(row["payload"]) for row in conn.execute(
-            f"SELECT payload FROM {table} WHERE {clause} ORDER BY id DESC LIMIT ? OFFSET ?",
+            f"SELECT payload FROM {table} WHERE {clause} ORDER BY {order_by} LIMIT ? OFFSET ?",
             [*params, max(1, int(limit)), max(0, int(offset))],
         )]
     return rows, total, latest
@@ -612,10 +614,42 @@ def _save_accounts(rows: list[dict], sync_artifacts: bool = True) -> None:
 
     sync_artifacts 参数为兼容保留（JSON/TXT 工件同步已随 SQLite 存储取消），
     SQLite 写入本身足够快，状态更新与内容变化走同一快速路径。
+
+    这里不得通过“删除整表后重插列表”保存。大量后台任务会先读取账号
+    列表、再只修改其中一条记录；若期间有其他任务新增账号，整表重写会把
+    这部分新数据错误丢弃。账号删除必须走 delete_account/delete_accounts。
     """
-    for row in rows:
-        row["copy_line"] = _account_line(row)
-    _save_collection("accounts", rows)
+    _ensure_sqlite()
+    with closing(_sqlite_conn()) as conn:
+        with conn:
+            for pos, raw in enumerate(rows, 1):
+                row = raw
+                rid = int(row.get("id") or pos)
+                row["id"] = rid
+                row["copy_line"] = _account_line(row)
+                values = (
+                    rid,
+                    str(row.get("email") or ""),
+                    str(row.get("status") or ""),
+                    int(bool(row.get("archived"))),
+                    str(row.get("created_at") or row.get("imported_at") or ""),
+                    str(row.get("updated_at") or ""),
+                    json.dumps(row, ensure_ascii=False),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO accounts(id,email,status,archived,created_at,updated_at,payload)
+                    VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        email=excluded.email,
+                        status=excluded.status,
+                        archived=excluded.archived,
+                        created_at=excluded.created_at,
+                        updated_at=excluded.updated_at,
+                        payload=excluded.payload
+                    """,
+                    values,
+                )
 
 
 def _load_jobs() -> list[dict]:
@@ -3138,25 +3172,19 @@ def delete_account(acc_id: int | None = None, email: str | None = None) -> bool:
     with _LOCK:
         rows = _load_accounts()
         target_email = (email or "").lower()
-        new_rows = []
         deleted_ids = []
-        deleted = False
         for row in rows:
             match_id = acc_id is not None and int(row.get("id") or 0) == int(acc_id)
             match_email = bool(target_email) and (row.get("email") or "").lower() == target_email
             if match_id or match_email:
-                deleted = True
                 deleted_ids.append(int(row.get("id") or 0))
-                continue
-            new_rows.append(row)
-        if not deleted:
+        if not deleted_ids:
             return False
-        _save_accounts(new_rows)
-        if deleted_ids:
-            _ensure_sqlite()
-            with closing(_sqlite_conn()) as conn:
+        _ensure_sqlite()
+        with closing(_sqlite_conn()) as conn:
+            with conn:
+                conn.executemany("DELETE FROM accounts WHERE id=?", [(x,) for x in deleted_ids])
                 conn.executemany("DELETE FROM codex_agent_accounts WHERE account_id=?", [(x,) for x in deleted_ids])
-                conn.commit()
         return True
 
 
@@ -3171,7 +3199,6 @@ def delete_accounts(account_ids: list[int] | None = None, emails: list[str] | No
     skipped: list[dict] = []
     with _LOCK:
         rows = _load_accounts()
-        new_rows = []
         seen_ids: set[int] = set()
         seen_emails: set[str] = set()
         for row in rows:
@@ -3181,18 +3208,16 @@ def delete_accounts(account_ids: list[int] | None = None, emails: list[str] | No
                 deleted.append({"id": row_id, "email": row.get("email")})
                 seen_ids.add(row_id)
                 seen_emails.add(row_email)
-                continue
-            new_rows.append(row)
         for item in ids - seen_ids:
             skipped.append({"id": item, "reason": "账号不存在"})
         for item in email_set - seen_emails:
             skipped.append({"email": item, "reason": "账号不存在"})
         if deleted:
-            _save_accounts(new_rows)
             _ensure_sqlite()
             with closing(_sqlite_conn()) as conn:
-                conn.executemany("DELETE FROM codex_agent_accounts WHERE account_id=?", [(x["id"],) for x in deleted])
-                conn.commit()
+                with conn:
+                    conn.executemany("DELETE FROM accounts WHERE id=?", [(x["id"],) for x in deleted])
+                    conn.executemany("DELETE FROM codex_agent_accounts WHERE account_id=?", [(x["id"],) for x in deleted])
     return deleted, skipped
 
 
