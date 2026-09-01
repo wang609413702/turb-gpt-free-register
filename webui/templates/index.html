@@ -3088,6 +3088,87 @@
     /* box 内 select 下拉 */
     html[data-theme="neo"] .roxy-workspace-box select { background-color: #14141f; color: #e8e8f4; }
 
+    /* ============================================================
+       Neo 补充覆盖 6：账号页 2FA 列 + 日期筛选（触发按钮/弹层/日历）
+       ============================================================ */
+
+    /* ---- 2FA 列：已启用徽标 / 操作按钮 / 验证码，原浅色薄荷/浅蓝底 -> 霓虹半透明 ---- */
+    html[data-theme="neo"] .accounts-table-v2 .acc-v2-twofa-badge {
+      color: #34f5c5; background: rgba(52,245,197,.12); border-color: rgba(52,245,197,.3);
+    }
+    html[data-theme="neo"] .accounts-table-v2 .acc-v2-twofa-btn {
+      background: rgba(52,245,197,.10); border-color: rgba(52,245,197,.35); color: #34f5c5;
+    }
+    html[data-theme="neo"] .accounts-table-v2 .acc-v2-twofa-btn:hover:not(:disabled) {
+      background: #34f5c5; border-color: #34f5c5; color: #06060c;
+      box-shadow: 0 0 10px rgba(52,245,197,.45);
+    }
+    html[data-theme="neo"] .accounts-table-v2 .acc-v2-twofa-code {
+      color: #6ea8ff; background: rgba(110,168,255,.12); border-color: rgba(110,168,255,.3);
+      text-shadow: 0 0 8px rgba(110,168,255,.35);
+    }
+
+    /* ---- 日期筛选触发按钮（账号/Codex 页共用）：白底 -> 深色 ---- */
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date-select-btn,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date-select-btn {
+      background: #1a1a26; border-color: var(--line); color: #c8c8de;
+    }
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date-select-btn:hover,
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date-select-btn:hover,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn {
+      color: var(--blue); border-color: rgba(0,224,198,.5); background: rgba(0,224,198,.08);
+    }
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date-select-btn::after,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date-select-btn::after { border-top-color: #8b8ba3; }
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn::after,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date-select.open .acc-v2-date-select-btn::after { border-bottom-color: #8b8ba3; }
+
+    /* 筛选行内联文字（"线程"等 label） */
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-inline { color: #9a9ab5; }
+
+    /* ---- 日期筛选弹层 + 日历 ---- */
+    html[data-theme="neo"] .acc-v2-date-select-menu {
+      background: #16161f; border: 1px solid var(--line); color: #c8c8de;
+      box-shadow: 0 12px 32px rgba(0,0,0,.6), 0 0 0 1px rgba(0,255,209,.06);
+    }
+    html[data-theme="neo"] .acc-v2-date-select-menu-row span { color: #9a9ab5; }
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date {
+      background: #14141f; color: #e8e8f4; border-color: var(--line);
+    }
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date:hover,
+    html[data-theme="neo"] .accounts-filter-v2 .acc-v2-date:focus,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date:hover,
+    html[data-theme="neo"] .codex-filter-v2 .acc-v2-date:focus {
+      border-color: var(--blue); outline: none;
+    }
+    html[data-theme="neo"] .cal-nav {
+      background: #1a1a26; border-color: var(--line); color: #c8c8de;
+    }
+    html[data-theme="neo"] .cal-nav:hover {
+      background: rgba(0,224,198,.10); border-color: rgba(0,224,198,.5); color: var(--blue);
+    }
+    html[data-theme="neo"] .cal-title { color: #f0f0ff; }
+    html[data-theme="neo"] .cal-week { color: #6a6a85; }
+    html[data-theme="neo"] .cal-cell { color: #c8c8de; }
+    html[data-theme="neo"] .cal-cell:hover:not(.start):not(.end) { background: rgba(0,224,198,.10); color: var(--blue); }
+    html[data-theme="neo"] .cal-cell.other { color: #4a4a60; }
+    html[data-theme="neo"] .cal-cell.start,
+    html[data-theme="neo"] .cal-cell.end {
+      background: #00e0c6; color: #06060c; box-shadow: 0 0 10px rgba(0,224,198,.4);
+    }
+    html[data-theme="neo"] .cal-cell.in-range { background: rgba(0,224,198,.14); color: var(--blue); }
+    html[data-theme="neo"] .cal-foot { border-top-color: var(--line); }
+    html[data-theme="neo"] .cal-foot-tip { color: #6a6a85; }
+    /* 弹层内快捷按钮（今天/昨天/近3天/近7天） */
+    html[data-theme="neo"] .acc-v2-date-select-menu .jobs-tb-btn {
+      background: #1a1a26; border-color: var(--line); color: #c8c8de;
+    }
+    html[data-theme="neo"] .acc-v2-date-select-menu .jobs-tb-btn:hover:not(:disabled) {
+      color: var(--blue); border-color: rgba(0,224,198,.5); background: rgba(0,224,198,.10);
+    }
+
   </style>
 </head>
 <body>

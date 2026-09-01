@@ -61,6 +61,9 @@ node_modules/
 *_proxy_cache.json
 *_records.json
 
+# Remail 邮箱复用队列（运行时数据）
+remail_reuse_queue.json
+
 # 历史调试输出（_xxx.out / _xxx_dump.html）
 tools/_*.out
 tools/_*.html
