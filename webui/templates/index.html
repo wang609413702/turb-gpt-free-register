@@ -4436,14 +4436,47 @@ function activateTab(tab, persist=true) {
 $$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
 
 // ---------- 概览 ----------
+let remailInventoryTimer = null;
+async function refreshRemailInventory() {
+  try {
+    const r = await api('/api/remail/inventory');
+    if (!r || r.ok === false || !r.suffix) return;
+    if (r.refresh_seconds) scheduleRemailInventory(r.refresh_seconds);
+    // 多来源时可用数量是各来源合计，让 loadSummary 重新汇总；单一 remail 来源直接展示库存。
+    if ((window.__emailSources || []).length > 1) { loadSummary(); return; }
+    $('#statOutlook').textContent = r.total_available;
+    $('#statAvailable').textContent = r.available;
+    const card = $('#statAvailable')?.closest('.stat');
+    if (card) card.title = `Remail @${r.suffix} 库存：可用 ${r.available}（每 ${r.refresh_seconds}s 刷新）`;
+  } catch(e) {}
+}
+
+function scheduleRemailInventory(seconds) {
+  const interval = Math.max(3, parseInt(seconds, 10) || 10) * 1000;
+  if (remailInventoryTimer && remailInventoryTimer._interval === interval) return;
+  if (remailInventoryTimer) clearInterval(remailInventoryTimer);
+  remailInventoryTimer = setInterval(refreshRemailInventory, interval);
+  remailInventoryTimer._interval = interval;
+}
+
 async function loadSummary() {
   try {
     const s = await api('/api/summary');
+    window.__emailSources = s.email_sources || [];
     $('#statAccounts').textContent = s.accounts;
     $('#statOutlook').textContent = s.outlook_total;
     $('#statAvailable').textContent = s.outlook_available;
     $('#statUsed').textContent = s.outlook_used;
     $('#statFailed').textContent = s.outlook_failed;
+    const inv = s.remail_inventory;
+    if (inv && inv.ok) {
+      scheduleRemailInventory(inv.refresh_seconds || 10);
+      const card = $('#statAvailable')?.closest('.stat');
+      if (card) card.title = `Remail @${inv.suffix} 库存：可用 ${inv.available}（每 ${inv.refresh_seconds}s 刷新）`;
+    } else if (remailInventoryTimer) {
+      clearInterval(remailInventoryTimer);
+      remailInventoryTimer = null;
+    }
   } catch(e) {}
 }
 

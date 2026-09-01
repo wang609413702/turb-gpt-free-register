@@ -634,6 +634,97 @@ def fetch_latest_otp(
     raise RemailError(f"等待 Remail 验证码超时: {target}; {last_error}")
 
 
+def _product_type_for_suffix(suffix: str) -> str:
+    value = suffix.strip().lstrip("@").lower()
+    if value == "gmail.com":
+        return "gmail"
+    if value == "gmail_variant":
+        return "gmail_variant"
+    if value == "icloud.com":
+        return "icloud"
+    if value == "domain":
+        return "domain"
+    return "microsoft"
+
+
+def inventory_query_seconds() -> int:
+    """注册页库存轮询间隔；供后端缓存 TTL 与前端定时器共用。"""
+    try:
+        value = int(getattr(_email_cfg, "REMAIL_INVENTORY_QUERY_SECONDS", 10) or 10)
+    except (TypeError, ValueError):
+        value = 10
+    return max(3, min(600, value))
+
+
+def _suffix_inventory_entry(product: dict, suffix: str) -> dict | None:
+    for entry in product.get("suffixes") or []:
+        if str(entry.get("suffix") or "").strip().lstrip("@").lower() == suffix:
+            return entry
+    return None
+
+
+_INVENTORY_CACHE: dict = {}
+_INVENTORY_CACHE_LOCK = threading.Lock()
+
+
+def fetch_suffix_inventory(suffix: str | None = None, *, force: bool = False) -> dict:
+    """查询项目详情，返回配置邮箱后缀的实时库存。
+
+    返回 {suffix, product_type, total_available, public_available, available}；
+    available 按库存策略取值：public_only 取公开库存，private_first 取总库存。
+    结果短 TTL 缓存，避免概览与前端轮询同时打到 Remail API。
+    """
+    target = str(suffix if suffix is not None else _email_suffix()).strip().lstrip("@").lower()
+    if not target:
+        raise RemailError("Remail 邮箱后缀无效")
+    ttl = max(3, min(inventory_query_seconds() // 2, 30))
+    now = time.monotonic()
+    with _INVENTORY_CACHE_LOCK:
+        cached = _INVENTORY_CACHE.get(target)
+        if cached and not force and now - cached[0] < ttl:
+            return cached[1]
+
+    detail = _request("GET", f"/v1/open/projects/{_project_id()}")
+    if isinstance(detail, dict) and isinstance(detail.get("data"), dict):
+        detail = detail["data"]
+    products = detail.get("products") if isinstance(detail, dict) else None
+    if not isinstance(products, list):
+        raise RemailError("Remail 项目详情响应缺少商品列表")
+
+    matched_type = _product_type_for_suffix(target)
+    type_product = None
+    for product in products:
+        entry = _suffix_inventory_entry(product, target)
+        if entry is not None:
+            result = {
+                "suffix": target,
+                "product_type": str(product.get("type") or matched_type),
+                "total_available": int(entry.get("totalAvailable") or 0),
+                "public_available": int(entry.get("publicAvailable") or 0),
+            }
+            break
+        if str(product.get("type") or "") == matched_type and type_product is None:
+            type_product = product
+    else:
+        if type_product is None:
+            raise RemailError(f"Remail 项目商品中找不到后缀 {target} 的库存信息")
+        result = {
+            "suffix": target,
+            "product_type": matched_type,
+            "total_available": int(type_product.get("totalAvailable") or 0),
+            "public_available": int(type_product.get("publicAvailable") or 0),
+        }
+
+    result["available"] = (
+        result["total_available"]
+        if _supply_policy() == "private_first"
+        else result["public_available"]
+    )
+    with _INVENTORY_CACHE_LOCK:
+        _INVENTORY_CACHE[target] = (time.monotonic(), result)
+    return result
+
+
 def list_projects(*, search: str | None = None, product_type: str | None = "microsoft") -> list[dict]:
     """查询当前 API Key 可见项目，供配置/诊断使用。"""
     params = {"offset": 0, "limit": 100}

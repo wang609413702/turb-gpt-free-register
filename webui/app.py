@@ -38,6 +38,15 @@ from webui import config_editor
 
 logger = logging.getLogger(__name__)
 
+
+def _remail_inventory_refresh_seconds() -> int:
+    from config import email as _email_cfg
+    try:
+        value = int(getattr(_email_cfg, "REMAIL_INVENTORY_QUERY_SECONDS", 10) or 10)
+    except (TypeError, ValueError):
+        value = 10
+    return max(3, min(600, value))
+
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
     if not src and request.method == "POST":
@@ -438,10 +447,33 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_summary():
         from config import email as _email_cfg
         from core.email_provider import parse_email_sources
+        sources = parse_email_sources(_email_cfg.EMAIL_SOURCE)
         pool = {"total": 0, "available": 0, "used": 0, "failed": 0}
-        for src in parse_email_sources(_email_cfg.EMAIL_SOURCE):
+        remail_inventory = None
+        for src in sources:
             # GPTMail/MailNest/CloudMail 地址按需生成，不属于本地邮箱池。
             if src in ("gptmail", "mailnest", "cloudmail", "cloudflare"):
+                continue
+            if src == "remail":
+                # Remail 库存在服务端，按配置后缀实时查询（短 TTL 缓存）。
+                try:
+                    from core.remail_client import fetch_suffix_inventory
+                    inv = fetch_suffix_inventory()
+                except Exception as exc:
+                    logger.warning("[Remail] 库存查询失败: %s", str(exc)[:160])
+                    remail_inventory = {"ok": False}
+                    continue
+                remail_inventory = {
+                    "ok": True,
+                    "suffix": inv["suffix"],
+                    "product_type": inv.get("product_type"),
+                    "total_available": inv["total_available"],
+                    "public_available": inv["public_available"],
+                    "available": inv["available"],
+                    "refresh_seconds": _remail_inventory_refresh_seconds(),
+                }
+                pool["total"] += int(inv["total_available"] or 0)
+                pool["available"] += int(inv["available"] or 0)
                 continue
             one = (
                 db.generic_api_email_pool_summary() if src == "generic_api"
@@ -453,6 +485,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         domain_pool = db.domain_email_pool_summary()
         return jsonify({
             "accounts": db.count_accounts(),
+            "email_sources": sources,
             "outlook_total": pool.get("total", 0),
             "outlook_available": pool.get("available", 0),
             "outlook_used": pool.get("used", 0),
@@ -461,6 +494,27 @@ def create_app(auth_code: str | None = None) -> Flask:
             "domain_available": domain_pool.get("available", 0),
             "domain_used": domain_pool.get("used", 0),
             "domain_failed": domain_pool.get("failed", 0),
+            "remail_inventory": remail_inventory,
+        })
+
+    @app.get("/api/remail/inventory")
+    def api_remail_inventory():
+        """按配置邮箱后缀查询 Remail 实时库存，供注册页动态刷新可用数量。"""
+        from config import email as _email_cfg
+        try:
+            from core.remail_client import fetch_suffix_inventory
+            suffix = str(request.args.get("suffix") or "").strip().lstrip("@") or None
+            inv = fetch_suffix_inventory(suffix)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)[:200], "refresh_seconds": _remail_inventory_refresh_seconds()})
+        return jsonify({
+            "ok": True,
+            "suffix": inv["suffix"],
+            "product_type": inv.get("product_type"),
+            "total_available": inv["total_available"],
+            "public_available": inv["public_available"],
+            "available": inv["available"],
+            "refresh_seconds": _remail_inventory_refresh_seconds(),
         })
 
     # ----------------------------------------------------------

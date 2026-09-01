@@ -498,6 +498,10 @@ EDITABLE_FIELDS = [
         "key": "REMAIL_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
         "label": "Remail 请求超时(秒)", "help": "Remail API 单次 HTTP 请求超时，默认 20 秒",
     },
+    {
+        "key": "REMAIL_INVENTORY_QUERY_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "Remail 库存查询间隔(秒)", "help": "邮箱来源为 remail 时，注册页可用数量轮询配置后缀库存的间隔，默认 10 秒，最小 3 秒",
+    },
     # ---- 浏览器地区画像 ----
     {
         "key": "BROWSER_LOCALE_PROFILE", "file": "browser.py", "type": "str", "group": "浏览器画像",
