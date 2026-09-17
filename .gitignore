@@ -64,6 +64,13 @@ node_modules/
 # Remail 邮箱复用队列（运行时数据）
 remail_reuse_queue.json
 
+# Remail 订单登记 / Roxy 孤儿环境登记（运行时数据）
+remail_order_registry.json
+roxy_orphan_profiles.json
+
+# 数据库备份 / 恢复产物（含账号凭证，永远不要提交）
+db_backup_*/
+
 # 历史调试输出（_xxx.out / _xxx_dump.html）
 tools/_*.out
 tools/_*.html

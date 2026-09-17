@@ -164,5 +164,57 @@ class RemailReuseQueueTests(unittest.TestCase):
 
 
 
+class RemailOrderRegistryTests(unittest.TestCase):
+    """订单登记表：进程重启后按 order_no 自动恢复取件上下文。"""
+
+    def setUp(self):
+        remail_client._CONTEXT_CACHE.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.registry_path = Path(self._tmp.name) / "remail_order_registry.json"
+        self._path_patcher = patch.object(remail_client, "_ORDER_REGISTRY_PATH", self.registry_path)
+        self._path_patcher.start()
+        self.addCleanup(self._path_patcher.stop)
+
+    def _read_registry(self):
+        return json.loads(self.registry_path.read_text(encoding="utf-8"))
+
+    @patch("core.remail_client.requests.request")
+    def test_pick_account_registers_order(self, request):
+        response = Mock(status_code=201)
+        response.json.return_value = {
+            "orderNo": "R-NEW-9",
+            "status": "active",
+            "deliveryEmail": "fresh@outlook.test",
+            "serviceToken": "st-fresh",
+        }
+        request.return_value = response
+        with patch.object(email_config, "REMAIL_API_KEY", "rk-test-key", create=True), patch.object(
+            email_config, "REMAIL_PROJECT_ID", 1001, create=True
+        ), patch.object(email_config, "REMAIL_EMAIL_SUFFIX", "outlook.com", create=True):
+            remail_client.pick_account()
+        self.assertEqual(self._read_registry(), {"fresh@outlook.test": "R-NEW-9"})
+
+    @patch("core.remail_client.requests.request")
+    def test_get_account_context_restores_from_registry_after_restart(self, request):
+        self.registry_path.write_text(json.dumps({"cached@icloud.test": "R-KEEP-1"}), encoding="utf-8")
+        request.return_value = _order_detail_response("cached@icloud.test", token="st-kept", order_no="R-KEEP-1")
+
+        account = remail_client.get_account_context("CACHED@icloud.test")
+
+        self.assertIsNotNone(account)
+        self.assertEqual(account.service_token, "st-kept")
+        self.assertEqual(request.call_args.args[:2], ("GET", "https://remail.aishop6.com/v1/open/orders/R-KEEP-1"))
+        # 恢复成功后内存命中，不再发请求。
+        again = remail_client.get_account_context("cached@icloud.test")
+        self.assertEqual(again.service_token, "st-kept")
+        self.assertEqual(request.call_count, 1)
+
+    def test_unknown_email_returns_none_without_request(self):
+        with patch("core.remail_client.requests.request") as request:
+            self.assertIsNone(remail_client.get_account_context("missing@icloud.test"))
+        request.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

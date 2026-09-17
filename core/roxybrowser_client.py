@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import requests
@@ -14,6 +16,14 @@ import requests
 from config import roxybrowser as _cfg
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 本轮创建、预期运行后删除的临时环境登记表。任务崩溃时 finally 可能没机会执行，
+# 下次注册前按此表清扫，避免孤儿环境堆积占满 Roxy 环境配额。
+_ORPHAN_REGISTRY_PATH = _PROJECT_ROOT / "roxy_orphan_profiles.json"
+_ORPHAN_REGISTRY_LOCK = threading.Lock()
+# Roxy 本地 API 并发创建会返回「正在创建中，请稍等！」；同进程内串行创建。
+_CREATE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -141,6 +151,95 @@ def _random_roxy_profile_name() -> str:
     prefix = str(getattr(_cfg, "ROXY_PROFILE_NAME_PREFIX", "rb") or "rb").strip() or "rb"
     # Roxy 环境名每次创建都不同：前缀 + 毫秒时间戳 + 随机 4 位十六进制。
     return f"{prefix}-{int(time.time() * 1000)}-{random.randrange(0x10000):04x}"
+
+
+def _deletion_expected_after_run() -> bool:
+    return (
+        bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
+        and bool(getattr(_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
+    )
+
+
+def _orphan_registry_load() -> list[dict]:
+    try:
+        data = json.loads(_ORPHAN_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _orphan_registry_save(items: list[dict]) -> None:
+    try:
+        _ORPHAN_REGISTRY_PATH.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.warning("[Roxy] 孤儿环境登记表写入失败：%s", exc)
+
+
+def _orphan_registry_add(profile_id: str) -> None:
+    if not profile_id or not _deletion_expected_after_run():
+        return
+    with _ORPHAN_REGISTRY_LOCK:
+        items = [x for x in _orphan_registry_load() if str(x.get("profile_id")) != str(profile_id)]
+        items.append({"profile_id": str(profile_id), "created_at": time.time()})
+        _orphan_registry_save(items)
+
+
+def _orphan_registry_remove(profile_id: str) -> None:
+    if not profile_id:
+        return
+    with _ORPHAN_REGISTRY_LOCK:
+        items = _orphan_registry_load()
+        kept = [x for x in items if str(x.get("profile_id")) != str(profile_id)]
+        if len(kept) != len(items):
+            _orphan_registry_save(kept)
+
+
+def sweep_orphan_profiles(max_age_seconds: float | None = None) -> int:
+    """清扫历史运行崩溃遗留的临时环境，返回成功删除的数量。
+
+    只处理登记表中超过最小存活时长的条目；删除失败的条目保留，下次再试。
+    """
+    with _ORPHAN_REGISTRY_LOCK:
+        items = _orphan_registry_load()
+        if not items:
+            return 0
+        if max_age_seconds is None:
+            max_age_seconds = max(
+                60.0, float(getattr(_cfg, "ROXY_ORPHAN_SWEEP_MIN_AGE_SECONDS", 1800) or 1800)
+            )
+        now = time.time()
+        client = RoxyBrowserClient()
+        kept: list[dict] = []
+        deleted = 0
+        dropped = 0
+        for entry in items:
+            try:
+                created_at = float(entry.get("created_at") or 0)
+            except (TypeError, ValueError):
+                created_at = 0.0
+            if created_at and now - created_at < max_age_seconds:
+                kept.append(entry)
+                continue
+            if client.delete_profile(str(entry.get("profile_id") or "")):
+                deleted += 1
+                continue
+            # 反复删除失败（如权限变化）的条目不永久占用登记表，移交人工处理。
+            attempts = int(entry.get("attempts") or 0) + 1
+            if attempts >= 3:
+                dropped += 1
+                logger.warning(
+                    "[Roxy] 环境多次删除失败，已移出清扫登记表，请在 Roxy 客户端手动处理：%s",
+                    entry.get("profile_id"),
+                )
+                continue
+            entry["attempts"] = attempts
+            kept.append(entry)
+        _orphan_registry_save(kept)
+    if deleted:
+        logger.warning("[Roxy] 已清扫 %s 个历史遗留的临时环境", deleted)
+    return deleted
 
 
 class RoxyBrowserClient:
@@ -452,14 +551,20 @@ class RoxyBrowserClient:
             body.get("osVersion") or "-",
             random_os_enabled,
         )
-        result = self.request(_cfg.ROXY_CREATE_METHOD, _cfg.ROXY_CREATE_PATH, json_body=body)
+        # 同进程多 worker 并发创建会触发 Roxy「正在创建中，请稍等！」；串行化创建请求。
+        with _CREATE_LOCK:
+            result = self.request(_cfg.ROXY_CREATE_METHOD, _cfg.ROXY_CREATE_PATH, json_body=body)
+        # 必须优先取 dirId：本地兜底创建会同时返回数字 id（时间戳）和 hex dirId。
+        # 若先取 id，后续 /browser/open 会把时间戳当 dirId，全部打到同一旧窗口。
         profile_id = _first(result, [
-            ("id",), ("dirId",), ("dir_id",), ("profile_id",), ("profileId",), ("browser_id",),
-            ("data", "id"), ("data", "dirId"), ("data", "dir_id"),
+            ("data", "dirId"), ("data", "dir_id"), ("dirId",), ("dir_id",),
             ("data", "profile_id"), ("data", "profileId"), ("data", "browser_id"),
+            ("profile_id",), ("profileId",), ("browser_id",),
+            ("data", "id"), ("id",),
         ])
         if not profile_id:
             raise RuntimeError(f"Roxy 创建环境成功但未返回 dirId/profile_id: {result}")
+        _orphan_registry_add(profile_id)
         return profile_id
 
     @staticmethod
@@ -468,6 +573,14 @@ class RoxyBrowserClient:
         # WebUI/人工配置里常用 - 表示“未配置”，这里统一按空处理。
         if text in ("-", "—", "无", "空", "none", "None", "null", "NULL"):
             return ""
+        return text
+
+    @staticmethod
+    def _dir_id_value(profile_id: str | int | None) -> str:
+        """Roxy /browser/open|close|delete 的 dirId 必须是字符串指纹目录 id，不能把数字 id 转 int。"""
+        text = str(profile_id or "").strip()
+        if text.endswith(".0") and text.replace(".", "", 1).isdigit():
+            text = text[:-2]
         return text
 
     def open_profile(self, profile_id: str | None = None) -> RoxyOpenResult:
@@ -487,36 +600,47 @@ class RoxyBrowserClient:
             logger.info("[Roxy] 已创建临时环境：%s", pid)
 
         path = str(_cfg.ROXY_OPEN_PATH).format(profile_id=pid)
-        params = dict(getattr(_cfg, "ROXY_OPEN_EXTRA_PARAMS", {}) or {})
-        # Roxy 官方 /browser/open body: {workspaceId, dirId, args, forceOpen, headless}
-        params.setdefault("workspaceId", _workspace_id_value())
-        params.setdefault("dirId", int(pid) if str(pid).isdigit() else pid)
-        params.setdefault("args", [])
-        params.setdefault("forceOpen", True)
-        # ROXY_OPEN_HEADLESS 是显式开关，优先级应高于 ROXY_OPEN_EXTRA_PARAMS，
-        # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
-        params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False))
-        logger.info("[Roxy] open 参数：profile=%s headless=%s keep_open=%s", pid, params.get("headless"), getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
-        result = self.request(
-            _cfg.ROXY_OPEN_METHOD,
-            path,
-            params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
-            json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
-        )
-        debugger_address = self._extract_debugger_address(result)
-        logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
-        webdriver_url = _first(result, [
-            ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
-            ("selenium",), ("selenium_url",), ("seleniumUrl",),
-            ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
-            ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
-        ]) or None
-        ws_endpoint = _first(result, [
-            ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
-            ("data", "ws"), ("data", "wsEndpoint"), ("data", "ws_endpoint"), ("data", "debuggerWsUrl"),
-        ]) or None
-        if not debugger_address and not webdriver_url:
-            raise RuntimeError(f"Roxy 已打开环境但未返回 Selenium/调试地址，请检查 ROXY_OPEN_PATH 或接口响应: {result}")
+        try:
+            params = dict(getattr(_cfg, "ROXY_OPEN_EXTRA_PARAMS", {}) or {})
+            # Roxy 官方 /browser/open body: {workspaceId, dirId, args, forceOpen, headless}
+            params.setdefault("workspaceId", _workspace_id_value())
+            params.setdefault("dirId", self._dir_id_value(pid))
+            params.setdefault("args", [])
+            params.setdefault("forceOpen", True)
+            # ROXY_OPEN_HEADLESS 是显式开关，优先级应高于 ROXY_OPEN_EXTRA_PARAMS，
+            # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
+            params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False))
+            logger.info("[Roxy] open 参数：profile=%s headless=%s keep_open=%s", pid, params.get("headless"), getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
+            result = self.request(
+                _cfg.ROXY_OPEN_METHOD,
+                path,
+                params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
+                json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
+            )
+            debugger_address = self._extract_debugger_address(result)
+            logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
+            webdriver_url = _first(result, [
+                ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
+                ("selenium",), ("selenium_url",), ("seleniumUrl",),
+                ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
+                ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
+            ]) or None
+            ws_endpoint = _first(result, [
+                ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
+                ("data", "ws"), ("data", "wsEndpoint"), ("data", "ws_endpoint"), ("data", "debuggerWsUrl"),
+            ]) or None
+            if not debugger_address and not webdriver_url:
+                raise RuntimeError(f"Roxy 已打开环境但未返回 Selenium/调试地址，请检查 ROXY_OPEN_PATH 或接口响应: {result}")
+        except Exception:
+            if created_by_run:
+                # 创建成功但打开失败：立即回收刚创建的环境，否则调用方拿不到
+                # profile_id，finally 无法清理，孤儿环境会堆积占满配额。
+                logger.warning("[Roxy] 环境 %s 打开失败，回收刚创建的环境", pid)
+                try:
+                    self.cleanup_profile(RoxyOpenResult(pid, {}, created_by_run=True))
+                except Exception as cleanup_exc:
+                    logger.warning("[Roxy] 打开失败后回收环境异常：%s", cleanup_exc)
+            raise
         return RoxyOpenResult(
             pid,
             result,
@@ -533,7 +657,7 @@ class RoxyBrowserClient:
         try:
             body = {
                 "workspaceId": _workspace_id_value(),
-                "dirId": int(profile_id) if str(profile_id).isdigit() else profile_id,
+                "dirId": self._dir_id_value(profile_id),
             }
             self.request(
                 _cfg.ROXY_CLOSE_METHOD,
@@ -545,15 +669,16 @@ class RoxyBrowserClient:
         except Exception as exc:
             logger.warning("[Roxy] 关闭环境失败：%s", exc)
 
-    def delete_profile(self, profile_id: str) -> None:
+    def delete_profile(self, profile_id: str) -> bool:
+        """删除环境；返回环境是否已不存在（删除成功，或目标本就不存在）。"""
         if not profile_id:
-            return
+            return False
         path = str(getattr(_cfg, "ROXY_DELETE_PATH", "/browser/delete")).format(profile_id=profile_id)
         method = str(getattr(_cfg, "ROXY_DELETE_METHOD", "POST") or "POST")
         try:
             body = {
                 "workspaceId": _workspace_id_value(),
-                "dirIds": [int(profile_id) if str(profile_id).isdigit() else profile_id],
+                "dirIds": [self._dir_id_value(profile_id)],
             }
             self.request(
                 method,
@@ -562,8 +687,15 @@ class RoxyBrowserClient:
                 json_body=body if method.upper() != "GET" else None,
             )
             logger.info("[Roxy] 已删除环境：%s", profile_id)
+            return True
         except Exception as exc:
+            text = str(exc or "")
+            if "不存在" in text or "not exist" in text.lower():
+                # 目标环境已经没了，等价于清理完成。
+                logger.info("[Roxy] 环境已不存在，视为清理完成：%s", profile_id)
+                return True
             logger.warning("[Roxy] 删除环境失败：%s", exc)
+            return False
 
     def cleanup_profile(self, opened: RoxyOpenResult | None) -> None:
         """任务结束清理：关闭窗口；一号一环境时删除本轮创建的 Profile。"""
@@ -582,8 +714,14 @@ class RoxyBrowserClient:
             # 删除前尽量确保已关闭；若 keep_open=True 则不删除，便于调试保留现场。
             if keep_open:
                 logger.info("[Roxy] ROXY_KEEP_BROWSER_OPEN=True，跳过删除环境：%s", opened.profile_id)
+                # 环境要保留给用户调试，从清扫登记表中移除，避免稍后被误删。
+                _orphan_registry_remove(opened.profile_id)
                 return
-            self.delete_profile(opened.profile_id)
+            if self.delete_profile(opened.profile_id):
+                _orphan_registry_remove(opened.profile_id)
+        else:
+            # 不预期删除（固定环境/配置关闭删除）：确保不会被清扫误删。
+            _orphan_registry_remove(opened.profile_id)
 
     @staticmethod
     def _extract_debugger_address(payload: dict) -> str | None:

@@ -683,3 +683,28 @@ def check_account_ideal(
         token, payment_method="ideal", country="NL", currency="EUR", label="IDEAL",
         proxy=proxy, timeout=timeout, max_attempts=max_attempts, retry_delay=retry_delay,
     )
+
+
+def check_account_upi(
+    token: str,
+    *,
+    proxy: Optional[str] = None,
+    timeout: float | None = None,
+    max_attempts: int | None = None,
+    retry_delay: float | None = None,
+) -> dict:
+    """检测账号 Checkout 是否支持 UPI 支付（IN/INR）。
+
+    IN/INR 通常返回标准 Stripe Checkout（cs_），upi 出现在 payment_method_types；
+    若返回 OpenAI 自定义结账（oaics_），UPI 只出现在 custom_payment_methods（cpmt_*），
+    这里把自定义支付方式也视为 UPI 信号，白名单 UPI_CUSTOM_PAYMENT_METHOD_IDS
+    留空 = 出现即算。
+    """
+    from config import proxy as proxy_cfg
+
+    custom_ids = list(getattr(proxy_cfg, "UPI_CUSTOM_PAYMENT_METHOD_IDS", []) or [])
+    return _check_payment_support(
+        token, payment_method="upi", country="IN", currency="INR", label="UPI",
+        proxy=proxy, timeout=timeout, max_attempts=max_attempts, retry_delay=retry_delay,
+        custom_method_ids=custom_ids,
+    )

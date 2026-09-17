@@ -9,15 +9,38 @@ from datetime import datetime
 from pathlib import Path
 
 from core import db
+from config import proxy as _proxy_cfg
 from core.account_liveness import check_account_liveness, log_path
-from core.chatgpt_plan import resolve_plan_check_route
+from core.chatgpt_plan import resolve_live_check_route
 
 logger = logging.getLogger(__name__)
 
-_WORKERS = 3
 _QUEUE_LIMIT = 500
-_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="live-check")
 _QUEUE_SLOTS = threading.BoundedSemaphore(_QUEUE_LIMIT)
+# 并发数从配置读取；配置页修改后下一次入队按新并发数重建线程池，无需重启。
+_EXECUTOR_LOCK = threading.Lock()
+_EXECUTOR: ThreadPoolExecutor | None = None
+_EXECUTOR_WORKERS = 0
+
+
+def _worker_count() -> int:
+    try:
+        value = int(getattr(_proxy_cfg, "LIVE_CHECK_WORKERS", 3) or 3)
+    except (TypeError, ValueError):
+        value = 3
+    return max(1, min(16, value))
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _EXECUTOR, _EXECUTOR_WORKERS
+    workers = _worker_count()
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is None or _EXECUTOR_WORKERS != workers:
+            if _EXECUTOR is not None:
+                _EXECUTOR.shutdown(wait=False, cancel_futures=False)
+            _EXECUTOR = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="live-check")
+            _EXECUTOR_WORKERS = workers
+        return _EXECUTOR
 _RUNNING: set[int] = set()
 _LOCK = threading.Lock()
 
@@ -45,7 +68,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         if not db.mark_account_live_check_running(account_id):
             _append_log(email, "[查活] 账号已删除或查活状态已被重置，取消执行")
             return {"ok": False, "status": "failed", "error": "账号已删除或查活状态已被重置"}
-        route = resolve_plan_check_route(explicit_proxy=proxy)
+        route = resolve_live_check_route(explicit_proxy=proxy)
         selected_proxy = route.get("proxy")
         _append_log(
             email,
@@ -112,7 +135,7 @@ def enqueue_account_live_check(*, account_id: int, email: str, trigger: str = "m
 
     _append_log(email, f"[查活] 已入队 account_id={account_id} trigger={trigger}", clear=True)
     try:
-        _EXECUTOR.submit(
+        _get_executor().submit(
             _run_live_check,
             account_id=account_id,
             email=email,
@@ -142,4 +165,4 @@ def enqueue_account_live_check(*, account_id: int, email: str, trigger: str = "m
 
 
 def queue_settings() -> dict:
-    return {"workers": _WORKERS, "queue_limit": _QUEUE_LIMIT}
+    return {"workers": _worker_count(), "queue_limit": _QUEUE_LIMIT}

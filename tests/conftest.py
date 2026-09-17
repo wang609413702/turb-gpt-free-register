@@ -20,6 +20,7 @@ def _isolate_runtime_storage(tmp_path):
     with ExitStack() as stack:
         for patcher in (
             patch.object(remail_client, "_REUSE_QUEUE_PATH", tmp_path / "remail_reuse_queue.json"),
+            patch.object(remail_client, "_ORDER_REGISTRY_PATH", tmp_path / "remail_order_registry.json"),
             patch.object(db, "_SQLITE_PATH", database_path),
             patch.object(db, "_DEFAULT_SQLITE_PATH", database_path),
             patch.object(db, "_ACCOUNTS_JSON", missing_source / "accounts.json"),

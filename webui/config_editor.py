@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
-EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL", "TRIAL_VN_PROXY_POOL"}
+EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "UPI_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL", "TRIAL_VN_PROXY_POOL", "TRIAL_IN_PROXY_POOL"}
 
 
 # ============================================================
@@ -55,6 +55,14 @@ EDITABLE_FIELDS = [
     {
         "key": "AUTO_PLAN_CHECK_AFTER_REGISTER", "file": "register.py", "type": "bool", "group": "注册方式",
         "label": "注册后自动查套餐", "help": "注册成功后自动入队查询套餐/Plus 资格；关闭后仅保存账号，不自动查套餐",
+    },
+    {
+        "key": "CF_CHALLENGE_WAIT_SECONDS", "file": "roxybrowser.py", "type": "int", "group": "注册方式",
+        "label": "Cloudflare验证等待(秒)", "help": "验证码页被 Cloudflare \"Just a moment\" 拦截时的最长等待放行秒数；等待期间不刷新不点击。注意：无头模式下 Cloudflare 几乎无法自动通过，建议关闭各驱动的无头开关",
+    },
+    {
+        "key": "OTP_SEND_NAV_API_WHEN_UNCONFIRMED", "file": "roxybrowser.py", "type": "bool", "group": "注册方式",
+        "label": "未确认发信时导航强发", "help": "验证码页未观测到发信请求时用浏览器导航 email-otp/send 接口强发；实测会触发 Cloudflare 验证循环，默认关闭，仅等页面自身行为/刷新恢复",
     },
 
     # ---- CloakBrowser ----
@@ -347,6 +355,10 @@ EDITABLE_FIELDS = [
         "label": "OTP 轮询间隔(秒)", "help": "每隔多少秒查一次新邮件",
     },
     {
+        "key": "OTP_POLL_CACHE_BUST", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",
+        "label": "取码缓存穿透", "help": "轮询取码接口时加 _otp_poll 参数防 CDN 缓存；严格校验参数的取码接口（如 gxyf-ch.com）会自动探测并跳过",
+    },
+    {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail,remail",
     },
@@ -502,6 +514,10 @@ EDITABLE_FIELDS = [
         "key": "REMAIL_INVENTORY_QUERY_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
         "label": "Remail 库存查询间隔(秒)", "help": "邮箱来源为 remail 时，注册页可用数量轮询配置后缀库存的间隔，默认 10 秒，最小 3 秒",
     },
+    {
+        "key": "REMAIL_EMAIL_PRICE", "file": "email.py", "type": "float", "group": "邮箱 / OTP",
+        "label": "Remail 邮箱单价(元)", "help": "注册页余额卡片和余额校验使用的单个邮箱价格；Remail 接口能返回价格时优先用接口价格，仅在接口未返回时使用此手动配置，0 表示未配置",
+    },
     # ---- 浏览器地区画像 ----
     {
         "key": "BROWSER_LOCALE_PROFILE", "file": "browser.py", "type": "str", "group": "浏览器画像",
@@ -521,6 +537,10 @@ EDITABLE_FIELDS = [
     {
         "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
         "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
+    },
+    {
+        "key": "PROXY_SESSION_ROTATE", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "代理会话轮换", "help": "领取代理时随机化用户名里的 session-编号，每次注册拿到新出口 IP，避免固定出口被 CF/风控按 IP 烧掉信誉（适配 711proxy 等 session 路由网关）",
     },
     {
         "key": "MOMO_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
@@ -559,12 +579,20 @@ EDITABLE_FIELDS = [
         "label": "GoPay自定义支付方式ID(每行一个)", "help": "ID/IDR 自定义结账里 GoPay 只出现在 custom_payment_methods(cpmt_*)。留空=出现自定义支付方式即视为支持 GoPay；填已知 cpmt_ id 则精确匹配",
     },
     {
+        "key": "UPI_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "UPI检测代理池(每行一个)", "help": "每行一个代理；建议 IN 出口。UPI 检测单独使用此池（IN/INR 结账）；留空则直连",
+    },
+    {
+        "key": "UPI_CUSTOM_PAYMENT_METHOD_IDS", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
+        "label": "UPI自定义支付方式ID(每行一个)", "help": "IN/INR 自定义结账里 UPI 只出现在 custom_payment_methods(cpmt_*)。留空=出现自定义支付方式即视为支持 UPI；填已知 cpmt_ id 则精确匹配",
+    },
+    {
         "key": "GCASH_CUSTOM_PAYMENT_METHOD_IDS", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
         "label": "GCash自定义支付方式ID(每行一个)", "help": "PH/PHP 自定义结账里 GCash 只出现在 custom_payment_methods(cpmt_*)。留空=出现自定义支付方式即视为支持 GCash；填已知 cpmt_ id 则精确匹配",
     },
     {
         "key": "MOMO_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
-        "label": "支付检测超时(秒)", "help": "所有支付检测（MoMo/GCash/Kakao/PayPal-BR/TH/DE/IDEAL）共用的单次请求超时；有效范围 1-60 秒，超出会自动钳制",
+        "label": "支付检测超时(秒)", "help": "所有支付检测（MoMo/GCash/Kakao/PayPal-BR/TH/DE/IDEAL/GoPay/UPI）共用的单次请求超时；有效范围 1-60 秒，超出会自动钳制",
     },
     {
         "key": "MOMO_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
@@ -582,7 +610,7 @@ EDITABLE_FIELDS = [
     # ---- 查试用代理池 ----
     {
         "key": "TRIAL_CHECK_DEFAULT_REGION", "file": "proxy.py", "type": "str", "group": "查试用代理池",
-        "label": "注册后默认查试用地区", "help": "注册完成后自动查试用资格走哪个地区的代理池：jp/gb/de/br/th/ph/id/vn（小写）；填其他值时回退 jp",
+        "label": "注册后默认查试用地区", "help": "注册完成后自动查试用资格走哪个地区的代理池：jp/gb/de/br/th/ph/id/vn/in（小写）；填其他值时回退 jp",
     },
     {
         "key": "TRIAL_JP_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
@@ -617,8 +645,20 @@ EDITABLE_FIELDS = [
         "label": "查询VN试用代理池(每行一个)", "help": "查 VN 试用资格专用代理池，必须是 VN 出口；池为空时查 VN 资格会直接报错（不会回退直连）",
     },
     {
+        "key": "TRIAL_IN_PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "查试用代理池",
+        "label": "查询IN试用代理池(每行一个)", "help": "查 IN（印度）试用资格专用代理池，必须是 IN 出口；池为空时查 IN 资格会直接报错（不会回退直连）",
+    },
+    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
+    },
+    {
+        "key": "LIVE_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
+        "label": "查活网络模式", "help": "账号查活的网络路径；留空=跟随套餐/Agent网络模式；proxy=走套餐查询专用代理(PLAN_CHECK_PROXY或代理池)；direct=走本地网络/VPN；auto=本地代理可用则走代理、未监听则直连",
+    },
+    {
+        "key": "LIVE_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "套餐/Agent 网络",
+        "label": "查活并发数", "help": "账号查活的后台并发线程数，默认 3（1-16）；与套餐查询队列相互独立，修改后下一次入队生效，无需重启",
     },
     {
         "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "套餐/Agent 网络",
@@ -1100,7 +1140,7 @@ def _format_env_value(value, vtype: str, key: str = "") -> str:
         lines = _normalize_config_value(value, vtype)
         # 代理池字段：保存时自动归一化每行（补 socks5h://、重排认证），
         # 这样用户填 host:port:user:pass 或 user:pass@host:port 都能正确生效。
-        if key in ("PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL", "TRIAL_VN_PROXY_POOL"):
+        if key in ("PROXY_POOL", "MOMO_PROXY_POOL", "GCASH_PROXY_POOL", "KAKAO_PROXY_POOL", "PAYPAL_BR_PROXY_POOL", "PAYPAL_TH_PROXY_POOL", "PAYPAL_DE_PROXY_POOL", "IDEAL_PROXY_POOL", "GOPAY_PROXY_POOL", "UPI_PROXY_POOL", "TRIAL_JP_PROXY_POOL", "TRIAL_GB_PROXY_POOL", "TRIAL_DE_PROXY_POOL", "TRIAL_BR_PROXY_POOL", "TRIAL_TH_PROXY_POOL", "TRIAL_PH_PROXY_POOL", "TRIAL_ID_PROXY_POOL", "TRIAL_VN_PROXY_POOL", "TRIAL_IN_PROXY_POOL"):
             from config.proxy import normalize_proxy
             normalized = [normalize_proxy(line) for line in lines]
             lines = [n for n in normalized if n]
@@ -1118,7 +1158,7 @@ def _format_env_value(value, vtype: str, key: str = "") -> str:
 
 def update_config(updates: dict) -> dict:
     """批量更新配置。所有 WebUI 可编辑项只写项目根 `.env`。"""
-    from config.env_loader import write_env_values, load_env
+    from config.env_loader import write_env_values, load_env, reload_config_modules
 
     updated, ignored, failed = [], [], []
     env_updates: dict[str, str] = {}
@@ -1141,5 +1181,11 @@ def update_config(updates: dict) -> dict:
     env_updated = write_env_values(env_updates) if env_updates else []
     if env_updated:
         load_env(override=True)
+        # 重放各 config/*.py 的 apply_env_overrides，让注册等运行路径立即读到新值
+        # （否则要重启进程才生效，出现"配置改了但注册还在用旧值"）。
+        try:
+            reload_config_modules()
+        except Exception:
+            logger.exception("配置模块热重载失败，新值将在下次重启后生效")
 
     return {"updated": updated, "ignored": ignored, "failed": failed, "env_updated": env_updated}

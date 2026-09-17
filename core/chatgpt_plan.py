@@ -97,10 +97,11 @@ def proxy_username(proxy: Optional[str]) -> str:
     return ""
 
 
-def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
+def resolve_plan_check_route(explicit_proxy: Optional[str] = None, *, mode: str | None = None, label: str = "套餐查询") -> dict:
     """解析套餐查询的实际网络路径。
 
     explicit_proxy 不是 None 时表示 API 调用方明确覆盖配置；空字符串代表直连。
+    mode 为 None 时读取 PLAN_CHECK_PROXY_MODE 配置；查活等场景可传入独立模式。
     """
     if explicit_proxy is not None:
         selected = str(explicit_proxy or "").strip()
@@ -115,9 +116,12 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
 
     from config import proxy as proxy_cfg
 
-    mode = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY_MODE", "auto") or "auto").strip().lower()
+    if mode is None:
+        mode = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY_MODE", "auto") or "auto").strip().lower()
+    else:
+        mode = str(mode or "").strip().lower()
     if mode not in {"auto", "proxy", "direct"}:
-        raise ValueError(f"PLAN_CHECK_PROXY_MODE={mode!r} 无效，可选 auto / proxy / direct")
+        raise ValueError(f"{label}网络模式 {mode!r} 无效，可选 auto / proxy / direct")
     if mode == "direct":
         return {
             "proxy": "",
@@ -141,14 +145,14 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             pass
     if not selected:
         if mode == "proxy":
-            raise ValueError("套餐查询网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
+            raise ValueError(f"{label}网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
         return {
             "proxy": "",
             "proxy_mode": mode,
             "network_route": "direct",
             "proxy_used": None,
             "proxy_username": None,
-            "proxy_fallback_reason": "未配置套餐查询代理或代理池",
+            "proxy_fallback_reason": f"未配置{label}代理或代理池",
         }
 
     is_local, available, reason = _local_proxy_status(selected)
@@ -169,6 +173,24 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         "proxy_username": proxy_username(selected) or None,
         "proxy_fallback_reason": None,
     }
+
+
+def resolve_live_check_route(explicit_proxy: Optional[str] = None) -> dict:
+    """解析查活（登录态检查）的网络路径。
+
+    留空 LIVE_CHECK_PROXY_MODE 时跟随套餐查询模式；proxy 复用套餐查询专用代理
+    （PLAN_CHECK_PROXY 或代理池），direct 走本地网络/VPN。
+    """
+    if explicit_proxy is not None:
+        return resolve_plan_check_route(explicit_proxy=explicit_proxy)
+
+    from config import proxy as proxy_cfg
+
+    raw_mode = str(getattr(proxy_cfg, "LIVE_CHECK_PROXY_MODE", "") or "").strip().lower()
+    if not raw_mode:
+        # 兼容默认：跟随套餐/Agent 网络模式。
+        return resolve_plan_check_route(label="查活")
+    return resolve_plan_check_route(mode=raw_mode, label="查活")
 
 
 def decode_jwt_payload_unverified(token: str) -> dict:

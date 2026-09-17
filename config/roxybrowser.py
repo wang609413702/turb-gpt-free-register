@@ -80,6 +80,10 @@ ROXY_DELETE_PROFILE_AFTER_RUN: bool = True
 ROXY_DELETE_PATH: str = "/browser/delete"
 ROXY_DELETE_METHOD: str = "POST"
 
+# 孤儿环境清扫：本轮创建的临时环境若因进程崩溃未被删除，会在登记表
+# roxy_orphan_profiles.json 中保留；下次注册开始时删除登记超过该秒数的条目。
+ROXY_ORPHAN_SWEEP_MIN_AGE_SECONDS: int = 1800
+
 # 创建 Roxy 环境时随机系统指纹；开启后每次 /browser/create 在 Windows / macOS 里随机选一个，
 # 避免固定 macOS 指纹。
 ROXY_RANDOM_OS_ON_CREATE: bool = True
@@ -114,6 +118,15 @@ ROXY_PROFILE_CREATE_PAYLOAD: dict = {
 # Roxy Codex 授权等待 callback 的最长秒数
 ROXY_CODEX_CALLBACK_TIMEOUT: int = 180
 
+# 验证码页"未观测到发信请求"时，是否用浏览器导航到 email-otp/send 接口强发。
+# 实测该兜底会把 auth.openai.com 拖入 Cloudflare 人机验证循环（无头模式下几乎必挂），
+# 导致验证码页再也打不开。默认关闭：未确认发信时仅等待页面自身行为/刷新恢复。
+OTP_SEND_NAV_API_WHEN_UNCONFIRMED: bool = False
+
+# 验证码页被 Cloudflare "Just a moment..." 拦截时的最长等待放行秒数。
+# 等待期间不刷新不点击（刷新会重置挑战）；放行后继续验证码流程。
+CF_CHALLENGE_WAIT_SECONDS: int = 90
+
 # 注册流程 HAR 采集（调试/协议对齐用，默认关闭）：
 #   True  = 通过 CDP 采集整个注册流程的请求信息并导出标准 HAR + JS 指纹快照，
 #           产物在 ROXY_HAR_OUTPUT_DIR（默认项目根 har_captures/），
@@ -129,4 +142,4 @@ ROXY_HAR_OUTPUT_DIR: str = ""
 ROXY_HAR_REDACT: bool = True
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CREATE_RETRIES': 'int', 'ROXY_CREATE_RETRY_DELAY': 'int', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int', 'ROXY_CAPTURE_HAR': 'bool', 'ROXY_HAR_OUTPUT_DIR': 'str', 'ROXY_HAR_REDACT': 'bool'})
+apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CREATE_RETRIES': 'int', 'ROXY_CREATE_RETRY_DELAY': 'int', 'ROXY_ORPHAN_SWEEP_MIN_AGE_SECONDS': 'int', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int', 'ROXY_CAPTURE_HAR': 'bool', 'ROXY_HAR_OUTPUT_DIR': 'str', 'ROXY_HAR_REDACT': 'bool', 'OTP_SEND_NAV_API_WHEN_UNCONFIRMED': 'bool', 'CF_CHALLENGE_WAIT_SECONDS': 'int'})

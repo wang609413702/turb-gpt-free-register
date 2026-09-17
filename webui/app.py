@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, trial_check_service, momo_check_service, gcash_check_service, kakao_check_service, paypal_check_service, ideal_check_service, gopay_check_service, extract_link_service, codex_agent_service, live_check_service, rebind_service
+from core import codex_retry_service, db, plan_check_service, trial_check_service, momo_check_service, gcash_check_service, kakao_check_service, paypal_check_service, ideal_check_service, gopay_check_service, upi_check_service, extract_link_service, codex_agent_service, live_check_service, rebind_service
 from core import momo_link_db, momo_link_service
 from core import gcash_link_db, gcash_link_service
 from core import gopay_link_db, gopay_link_service
@@ -133,7 +133,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_type", "current_plan_type", "plus_trial_eligible",
         *(f"{TRIAL_REGION_FIELD_PREFIXES[region]}_eligible" for region in TRIAL_REGIONS),
         "plan_check_status", "trial_check_status", "codex_status", "codex_agent_status",
-        "momo_check_status", "gcash_check_status", "kakao_check_status", "paypal_check_status", "ideal_check_status", "gopay_check_status",
+        "momo_check_status", "gcash_check_status", "kakao_check_status", "paypal_check_status", "ideal_check_status", "gopay_check_status", "upi_check_status",
         "totp_setup_status",
     ):
         if key in row:
@@ -193,6 +193,10 @@ def _compact_account_for_list(row: dict) -> dict:
         "gopay_has_gopay", "gopay_decision", "gopay_decision_text", "gopay_supported",
         "gopay_methods", "gopay_check_error", "gopay_checked_at",
         "gopay_exit_ip", "gopay_exit_country", "gopay_session_kind",
+        # UPI 检测结果（检测成功/失败时才需要）。
+        "upi_has_upi", "upi_decision", "upi_decision_text", "upi_supported",
+        "upi_methods", "upi_check_error", "upi_checked_at",
+        "upi_exit_ip", "upi_exit_country", "upi_session_kind",
         # 2FA 设置状态。
         "totp_setup_error", "totp_setup_message", "totp_setup_started_at", "totp_setup_completed_at",
         # 换绑状态（是否换绑列 / 换绑徽标 / 换绑自提示）。
@@ -402,6 +406,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_gopay_checks = db.recover_interrupted_gopay_checks()
     if recovered_gopay_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 GoPay 检测状态", recovered_gopay_checks)
+    recovered_upi_checks = db.recover_interrupted_upi_checks()
+    if recovered_upi_checks:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 UPI 检测状态", recovered_upi_checks)
     recovered_extract_links = db.recover_interrupted_extract_links()
     if recovered_extract_links:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
@@ -517,6 +524,54 @@ def create_app(auth_code: str | None = None) -> Flask:
             "refresh_seconds": _remail_inventory_refresh_seconds(),
         })
 
+    @app.get("/api/remail/wallet")
+    def api_remail_wallet():
+        """查询 Remail 钱包余额与邮箱单价，供注册页余额卡片和开始注册余额校验使用。
+
+        单价优先取项目商品接口（按服务模式），接口未返回时退回手动配置的
+        REMAIL_EMAIL_PRICE；轮询间隔与 Remail 库存查询共用同一配置。
+        """
+        from config import email as _email_cfg
+        force = (request.args.get("force") or "").lower() in {"1", "true", "yes"}
+        refresh_seconds = _remail_inventory_refresh_seconds()
+        try:
+            from core.remail_client import fetch_wallet
+            wallet = fetch_wallet(force=force)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)[:200], "refresh_seconds": refresh_seconds})
+
+        price = None
+        price_source = None
+        try:
+            from core.remail_client import fetch_suffix_inventory
+            raw_price = fetch_suffix_inventory(force=force).get("price")
+            if raw_price is not None:
+                price = round(float(raw_price), 6)
+                price_source = "api"
+        except Exception as exc:
+            logger.warning("[Remail] 邮箱单价查询失败: %s", str(exc)[:160])
+        if price is None:
+            try:
+                configured = float(str(getattr(_email_cfg, "REMAIL_EMAIL_PRICE", 0) or 0).strip())
+            except (TypeError, ValueError):
+                configured = 0.0
+            if configured > 0:
+                price = configured
+                price_source = "config"
+        try:
+            from core.remail_client import reuse_queue_count
+            reuse_count = reuse_queue_count()
+        except Exception:
+            reuse_count = 0
+        return jsonify({
+            "ok": True,
+            "balance": wallet["balance"],
+            "price": price,
+            "price_source": price_source,
+            "reuse_count": reuse_count,
+            "refresh_seconds": refresh_seconds,
+        })
+
     # ----------------------------------------------------------
     # 已注册账号
     # ----------------------------------------------------------
@@ -583,6 +638,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         snapshot["paypal_queue"] = paypal_check_service.queue_settings()
         snapshot["ideal_queue"] = ideal_check_service.queue_settings()
         snapshot["gopay_queue"] = gopay_check_service.queue_settings()
+        snapshot["upi_queue"] = upi_check_service.queue_settings()
         return jsonify(snapshot)
 
 
@@ -975,7 +1031,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/check-trial")
     def api_account_check_trial():
-        """把单账号地区试用资格查询加入后台队列。Body {account_id|email, region: jp|gb|de|br|th|ph|id, proxy?, timezone_offset_min?}"""
+        """把单账号地区试用资格查询加入后台队列。Body {account_id|email, region: jp|gb|de|br|th|ph|id|vn|in, proxy?, timezone_offset_min?}"""
         data = request.get_json(silent=True) or {}
         acc_id = data.get("account_id") or data.get("id")
         email = (data.get("email") or "").strip()
@@ -1018,7 +1074,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/check-trial-bulk")
     def api_accounts_check_trial_bulk():
-        """批量把地区试用资格查询加入统一后台队列。Body {account_ids:[...], region: jp|gb|de|br|th|ph|id, proxy?, timezone_offset_min?}"""
+        """批量把地区试用资格查询加入统一后台队列。Body {account_ids:[...], region: jp|gb|de|br|th|ph|id|vn|in, proxy?, timezone_offset_min?}"""
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
         region = str(data.get("region") or "").strip().lower()
@@ -1647,6 +1703,102 @@ def create_app(auth_code: str | None = None) -> Flask:
         failed = []
         for acc in items:
             queued = gopay_check_service.enqueue_account_gopay_check(
+                account_id=int(acc.get("id")),
+                email=acc.get("email") or "",
+                access_token=acc.get("access_token") or "",
+                trigger="manual_bulk",
+                proxy=proxy,
+            )
+            item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+        }), 202
+
+    # ==================== UPI 检测 ==================== #
+    @app.post("/api/accounts/upi-check")
+    def api_account_upi_check():
+        """把单账号 UPI 检测加入后台队列。Body {account_id|email, proxy?}"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = (data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except Exception:
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = upi_check_service.enqueue_account_upi_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/upi-check-bulk")
+    def api_accounts_upi_check_bulk():
+        """批量把 UPI 检测加入统一后台队列。Body {account_ids:[...], proxy?}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多检测 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+
+        items = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not (acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            items.append(acc)
+
+        started = []
+        busy = []
+        failed = []
+        for acc in items:
+            queued = upi_check_service.enqueue_account_upi_check(
                 account_id=int(acc.get("id")),
                 email=acc.get("email") or "",
                 access_token=acc.get("access_token") or "",

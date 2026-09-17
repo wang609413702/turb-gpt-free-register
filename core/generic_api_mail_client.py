@@ -545,6 +545,11 @@ def release_account(email: str, status: str = "available", note: str | None = No
     _CONTEXT_CACHE.pop(email, None)
 
 
+# 这些账号的取码接口拒绝未知查询参数（如 gxyf-ch.com 会 400 invalid_request），
+# 探测到一次后永久跳过缓存穿透参数（进程内记忆）。
+_NO_BUST_ACCOUNTS: set[str] = set()
+
+
 def fetch_latest_otp(
     email: str,
     after_ts: float | None = None,
@@ -575,7 +580,68 @@ def fetch_latest_otp(
     last_error = ""
     best_otp: str | None = None
     best_seen_at: float = 0.0
+    best_msg_ts: float | None = None
     settle_until: float | None = None
+
+    def _candidate_msg_ts(meta: dict) -> float | None:
+        if not isinstance(meta, dict) or not meta:
+            return None
+        ts = meta.get("msg_ts")
+        if ts is not None:
+            try:
+                return float(ts)
+            except (TypeError, ValueError):
+                pass
+        return _parse_generic_api_ts(meta.get("received_at") or meta.get("receivedAt"))
+
+    def _consider_candidate(code: str, meta: dict, source_label: str) -> None:
+        """按邮件时间戳决定是否替换锁定候选，只接受严格更新的验证码。
+
+        取码接口在多封验证码邮件之间轮询返回（后端缓存/负载均衡）时，旧的
+        "见码就替换"逻辑会在两个候选之间反复横跳、无限重置 settle，最后还
+        可能锁定更旧的验证码。时间戳相同/更旧的一律忽略，不再重置 settle。
+        """
+        nonlocal best_otp, best_msg_ts, best_seen_at, settle_until
+        now_seen = time.time()
+        msg_ts = _candidate_msg_ts(meta)
+        ts_label = (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(msg_ts)) if msg_ts else "-"
+        )
+        if not best_otp:
+            best_otp = code
+            best_msg_ts = msg_ts
+            best_seen_at = now_seen
+            settle_until = now_seen + settle
+            logger.info(
+                f"[GenericAPI] 首次锁定 OTP={code}, source={source_label} ts={ts_label}, "
+                f"等 {settle}s 看取码接口是否出现更新验证码..."
+            )
+            return
+        if code == best_otp:
+            logger.debug(f"[GenericAPI] 取码接口仍返回候选 OTP={best_otp}")
+            return
+        # 替换条件：双方都无时间戳（沿用旧行为），或新候选时间戳严格更新。
+        # 新候选无时间戳但已锁定候选有时：无法证明更新，保留已锁定候选。
+        replace = False
+        if best_msg_ts is None and msg_ts is None:
+            replace = True
+        elif msg_ts is not None and (best_msg_ts is None or msg_ts > best_msg_ts + 0.5):
+            replace = True
+        if not replace:
+            logger.info(
+                f"[GenericAPI] 忽略更旧/无法比较的验证码 OTP={code} (ts={ts_label})，"
+                f"保留较新候选 OTP={best_otp}"
+            )
+            return
+        logger.info(
+            f"[GenericAPI] 发现更新 OTP={code}, source={source_label} ts={ts_label}，"
+            f"替换之前的 {best_otp}, 重置 settle 计时"
+        )
+        best_otp = code
+        best_msg_ts = msg_ts
+        best_seen_at = now_seen
+        settle_until = now_seen + settle
+
     logger.info(
         f"[GenericAPI] 开始轮询取码地址: {email}，"
         f"最长 {max_wait or _email_cfg.OTP_MAX_WAIT}s, settle={settle}s"
@@ -588,83 +654,48 @@ def fetch_latest_otp(
         try:
             session = requests.Session()
             # 不修改 yangyang 的路径型 URL；其列表接口本身按邮件 ID 返回数据。
-            poll_url = account.code_url if is_yangyang else _cache_busted_url(account.code_url, attempt)
+            bust = (
+                account.email not in _NO_BUST_ACCOUNTS
+                and bool(getattr(_email_cfg, "OTP_POLL_CACHE_BUST", True))
+            )
+            poll_url = account.code_url if (is_yangyang or not bust) else _cache_busted_url(account.code_url, attempt)
             yy_result = _fetch_yangyang_otp(session, poll_url, headers, after_ts=after_ts) if is_yangyang else None
+            resp = None
+            text = ""
             if yy_result:
                 code, yy_meta = yy_result
-                now_seen = time.time()
-                if not best_otp:
-                    best_otp = code
-                    best_seen_at = now_seen
-                    settle_until = now_seen + settle
-                    logger.info(
-                        f"[GenericAPI] 首次锁定 OTP={code}, source=yangyang mail_id={yy_meta.get('mail_id')} ts={yy_meta.get('received_at')}, "
-                        f"等 {settle}s 看取码接口是否出现更新验证码..."
-                    )
-                elif code != best_otp:
-                    logger.info(
-                        f"[GenericAPI] 发现更新 OTP={code}, source=yangyang mail_id={yy_meta.get('mail_id')} ts={yy_meta.get('received_at')}，"
-                        f"替换之前的 {best_otp}, 重置 settle 计时"
-                    )
-                    best_otp = code
-                    best_seen_at = now_seen
-                    settle_until = now_seen + settle
-                else:
-                    logger.debug(f"[GenericAPI] 取码接口仍返回候选 OTP={best_otp}")
-                resp = None
-                text = ""
+                _consider_candidate(code, yy_meta, f"yangyang mail_id={yy_meta.get('mail_id')}")
+            elif is_yangyang:
+                last_error = "yangyang 列表中尚未出现 after_ts 之后的新验证码邮件"
             else:
-                if is_yangyang:
-                    last_error = "yangyang 列表中尚未出现 after_ts 之后的新验证码邮件"
-                    resp = None
-                    text = ""
-                else:
+                resp = session.get(poll_url, headers=headers, timeout=20, verify=False)
+                text = resp.text or ""
+            if resp is not None:
+                if resp.status_code == 400 and poll_url != account.code_url:
+                    # 严格校验参数的取码接口（如 gxyf-ch.com 会 400 invalid_request
+                    # "请求参数无效"）不接受任何未知查询参数：记住该账号，立即用
+                    # 原始 URL 重试本次轮询，后续也不再加缓存穿透参数。
+                    _NO_BUST_ACCOUNTS.add(account.email)
+                    logger.warning(
+                        f"[GenericAPI] 取码接口拒绝缓存穿透参数（HTTP 400），"
+                        f"改用原始 URL 轮询：{account.email}"
+                    )
+                    poll_url = account.code_url
                     resp = session.get(poll_url, headers=headers, timeout=20, verify=False)
                     text = resp.text or ""
-            if resp is None:
-                pass
-            elif resp.status_code == 200:
-                structured = _extract_structured_api_code(text, after_ts=after_ts)
-                structured_meta = structured[1] if structured else {}
-                code = structured[0] if structured else _extract_code(text)
-                if code:
-                    now_seen = time.time()
-                    if not best_otp:
-                        best_otp = code
-                        best_seen_at = now_seen
-                        settle_until = now_seen + settle
-                        if structured_meta:
-                            logger.info(
-                                f"[GenericAPI] 首次锁定 OTP={code}, source=structured_api "
-                                f"ts={structured_meta.get('received_at')} subject={str(structured_meta.get('subject') or '')[:80]!r}, "
-                                f"等 {settle}s 看取码接口是否出现更新验证码..."
-                            )
-                        else:
-                            logger.info(
-                                f"[GenericAPI] 首次锁定 OTP={code}, "
-                                f"等 {settle}s 看取码接口是否出现更新验证码..."
-                            )
-                    elif code != best_otp:
-                        if structured_meta:
-                            logger.info(
-                                f"[GenericAPI] 发现更新 OTP={code}, source=structured_api "
-                                f"ts={structured_meta.get('received_at')} subject={str(structured_meta.get('subject') or '')[:80]!r}，"
-                                f"替换之前的 {best_otp}, 重置 settle 计时"
-                            )
-                        else:
-                            logger.info(
-                                f"[GenericAPI] 发现更新 OTP={code}，"
-                                f"替换之前的 {best_otp}, 重置 settle 计时"
-                            )
-                        best_otp = code
-                        best_seen_at = now_seen
-                        settle_until = now_seen + settle
+                if resp.status_code == 200:
+                    structured = _extract_structured_api_code(text, after_ts=after_ts)
+                    if structured:
+                        _consider_candidate(structured[0], structured[1], "structured_api")
                     else:
-                        logger.debug(f"[GenericAPI] 取码接口仍返回候选 OTP={best_otp}")
+                        code = _extract_code(text)
+                        if code:
+                            # 无时间戳的纯文本候选：无法比较新旧，沿用"见码替换"。
+                            _consider_candidate(code, {}, "plain")
+                        else:
+                            last_error = f"HTTP 200 但未提取到 6 位验证码，响应预览: {text[:160]}"
                 else:
-                    last_error = f"HTTP 200 但未提取到 6 位验证码，响应预览: {text[:160]}"
-            else:
-                last_error = f"HTTP {resp.status_code}: {text[:160]}"
+                    last_error = f"HTTP {resp.status_code}: {text[:160]}"
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {exc}"
 

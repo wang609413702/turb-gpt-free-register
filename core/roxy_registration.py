@@ -16,7 +16,7 @@ from core.account_export import save_account_data, post_register_dwell
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.openai_auth import AccountUnusableError, detect_account_unusable_text
-from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
+from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult, sweep_orphan_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -597,7 +597,7 @@ def _install_email_otp_send_probe(driver) -> None:
           window.__roxyEmailOtpSendProbeHooked = true;
           const hit = url => {
             const s = String(url || '').toLowerCase();
-            return s.includes('/api/accounts/email-otp/send')
+            return s.includes('/api/accounts/email-otp/')
               || s.includes('passwordless_signup_send_otp')
               || s.includes('passwordless_login_send_otp')
               || /passwordless.*send[_-]?otp/.test(s);
@@ -672,7 +672,7 @@ def _read_email_otp_send_probe(driver) -> list[dict]:
         (() => {
           const hit = url => {
             const s = String(url || '').toLowerCase();
-            return s.includes('/api/accounts/email-otp/send')
+            return s.includes('/api/accounts/email-otp/')
               || s.includes('passwordless_signup_send_otp')
               || s.includes('passwordless_login_send_otp')
               || /passwordless.*send[_-]?otp/.test(s);
@@ -897,6 +897,16 @@ def _wait_for_email_input(driver, timeout: int | None = None):
         el = _find_visible_email_input_js(driver)
         if el:
             return el
+        # Cloudflare 挑战页（常见于重新提交邮箱后的 authorize 跳转）：
+        # 用独立预算等放行，不被外层剩余时间饿死（此前只剩 20s 预算导致放行前就放弃）。
+        if _is_cloudflare_challenge_page(driver):
+            cf_budget = max(30, int(getattr(_cfg, "CF_CHALLENGE_WAIT_SECONDS", 90) or 90))
+            logger.warning(
+                "%s 等待邮箱输入框时被 Cloudflare 拦截，原地等放行（最长 %ss）",
+                _log_prefix(driver), cf_budget,
+            )
+            _wait_cloudflare_challenge_clear(driver, timeout=cf_budget)
+            continue
         last_state = _email_entry_state(driver)
         if not clicked_email_option and _click_email_entry_option(driver):
             clicked_email_option = True
@@ -1534,6 +1544,8 @@ def _ensure_email_otp_ready(driver, email: str, timeout: int = 35, prefer_after_
 
     网络慢时单轮 35s 预算经常被 12s 一次的 script timeout 和卡住的点击耗光，
     页面实际停在半加载状态；刷新重开验证码页后再试一轮，比直接判死整个任务划算。
+    页面被 Cloudflare "Just a moment..." 拦截时不刷新（刷新会重置挑战），
+    先等放行再继续。
     """
     attempts = 3
     last_exc: RuntimeError | None = None
@@ -1548,6 +1560,22 @@ def _ensure_email_otp_ready(driver, email: str, timeout: int = 35, prefer_after_
             last_exc = exc
             if attempt >= attempts:
                 raise
+            cf_budget = max(30, int(getattr(_cfg, "CF_CHALLENGE_WAIT_SECONDS", 90) or 90))
+            if _is_cloudflare_challenge_page(driver):
+                hint = _headless_cf_hint(driver)
+                if hint:
+                    logger.warning(
+                        "%s[OTP] 验证码页被 Cloudflare 拦截且当前为无头模式（%s=True），无头通过率极低，建议关闭无头后重试",
+                        _log_prefix(driver), hint,
+                    )
+                logger.warning(
+                    "%s[OTP] 验证码页被 Cloudflare 拦截，等待放行（最长 %ss）后继续本轮重试，不刷新（刷新会重置挑战）",
+                    _log_prefix(driver), cf_budget,
+                )
+                if _wait_cloudflare_challenge_clear(driver, timeout=cf_budget):
+                    # 已放行：不刷新，直接进入下一轮等待验证码输入框。
+                    continue
+                logger.warning("%s[OTP] Cloudflare 验证 %ss 未放行，刷新验证码页后重试", _log_prefix(driver), cf_budget)
             logger.warning(
                 "%s[OTP] 等待验证码输入框/发信入口超时（%s/%s），刷新验证码页后重试：%s",
                 _log_prefix(driver), attempt, attempts, msg[:200],
@@ -1562,47 +1590,113 @@ def _ensure_email_otp_ready(driver, email: str, timeout: int = 35, prefer_after_
     raise last_exc or RuntimeError(f"等待邮箱验证码输入框/发信入口超时：email={email}")
 
 
+# Cloudflare "Just a moment..." 人机验证页特征（多语言标题，小写匹配）。
+_CF_CHALLENGE_TITLE_MARKS = (
+    "just a moment", "attention required", "checking your browser",
+    "しばらくお待ちください", "请稍候", "請稍候", "chờ một chút",
+)
+
+
+def _is_cloudflare_challenge_page(driver) -> bool:
+    """当前页面是否处于 Cloudflare 人机验证（标题或正文特征）。
+
+    验证期间不能点击重发/刷新/导航，否则会重置挑战甚至把会话拖入验证循环。
+    标题读取需兼容三类驱动：Roxy 原生 Selenium（.title）、Cloak/Playwright
+    适配层（.page.title()，无 .title 属性）、以及两者皆无时的纯正文正则。
+    CF 会按 Accept-Language 本地化挑战页（如 ja-JP 下标题为日文），
+    正文正则必须覆盖多语言。
+    """
+    title = ""
+    for getter in (
+        lambda: str(driver.title or ""),
+        lambda: str(driver.page.title() or ""),
+    ):
+        try:
+            title = getter()
+            break
+        except Exception:
+            continue
+    title_l = title.strip().lower()
+    if title_l and any(mark in title_l for mark in _CF_CHALLENGE_TITLE_MARKS):
+        return True
+    try:
+        return bool(driver.execute_script(r"""
+        const t = String((document.body && document.body.innerText) || '');
+        if (!/performing security verification|verify you are not a bot|attention required|just a moment|しばらくお待ちください|セキュリティを確認|请稍候|請稍候|chờ một chút|đang xác minh/i.test(t)) return false;
+        return !document.querySelector('input[type="email"],input[name="email"],input[autocomplete="email"],input[inputmode="numeric"]');
+        """))
+    except Exception:
+        return False
+
+
+def _headless_cf_hint(driver) -> str:
+    """返回当前启用的无头开关名（用于 Cloudflare 告警提示）；非无头返回空串。"""
+    try:
+        from config import cloakbrowser as _cloak_cfg
+        if bool(getattr(_cloak_cfg, "CLOAK_HEADLESS", False)):
+            return "CLOAK_HEADLESS"
+    except Exception:
+        pass
+    try:
+        if bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False)):
+            return "ROXY_OPEN_HEADLESS"
+    except Exception:
+        pass
+    return ""
+
+
+def _wait_cloudflare_challenge_clear(driver, timeout: float = 90.0) -> bool:
+    """等待 Cloudflare 人机验证自动放行；期间不刷新不点击（刷新会重置挑战）。"""
+    prefix = _log_prefix(driver)
+    end = time.time() + max(5.0, float(timeout))
+    waited = False
+    while time.time() < end:
+        if not _is_cloudflare_challenge_page(driver):
+            if waited:
+                logger.info(
+                    "%s[OTP] Cloudflare 验证已放行（等待 %ds），继续验证码流程",
+                    prefix, int(timeout - (end - time.time())),
+                )
+            return True
+        if not waited:
+            logger.info("%s[OTP] 检测到 Cloudflare 人机验证，原地等待放行（最长 %.0fs）", prefix, timeout)
+        waited = True
+        time.sleep(1.2)
+    return not _is_cloudflare_challenge_page(driver)
+
+
 def _ensure_email_otp_ready_once(driver, email: str, timeout: int = 35, prefer_after_ts: float | None = None) -> float:
     """进入取码等待前，确认邮箱 OTP 流已经真实触发且输入框可用。
 
     只看到 /email-verification URL 或 OTP 输入框不足以证明邮件已发送；新版页面
     可能先渲染验证码页外壳，因此需要在取码前补点一次真实发送/重发入口。
+    Cloudflare 验证页出现时只等待放行，不做任何点击/导航。
     """
     end = time.time() + timeout
     last = {}
     clicked_passwordless = False
     clicked_resend = False
-    attempted_input_resend = False
+    cf_challenge_logged = False
     while time.time() < end:
         if _has_access_token(driver):
             return _email_otp_wait_after_ts(driver, prefer_after_ts)
+        if _is_cloudflare_challenge_page(driver):
+            if not cf_challenge_logged:
+                cf_challenge_logged = True
+                logger.warning(
+                    "%s[OTP] 验证码页正在 Cloudflare 人机验证，暂停点击/刷新，等待放行",
+                    _log_prefix(driver),
+                )
+            time.sleep(1.2)
+            continue
         _install_email_otp_send_probe(driver)
         if _email_otp_input_present(driver):
             state = _email_otp_page_state(driver)
             last = state
             url = str(state.get("url") or "").lower()
-            if "email-verification" in url and not clicked_passwordless and not clicked_resend and not attempted_input_resend:
-                attempted_input_resend = True
-                try:
-                    result = _click_resend_email_otp(driver, timeout=4)
-                    if result.get("ok"):
-                        clicked_resend = True
-                        logger.info("%s[OTP] 验证码输入框已出现，取码前补点发送/重发入口：%s", _log_prefix(driver), result)
-                        _log_email_otp_send_probe(driver, "验证码输入框补点发送/重发后")
-                        continue
-                except RuntimeError as exc:
-                    msg = str(exc)
-                    if "会话已失效" in msg or "跳回登录页" in msg:
-                        raise
-                    logger.info("%s[OTP] 验证码输入框已出现但未找到可补点的发送/重发入口，继续检查发信请求：%s", _log_prefix(driver), msg[:160])
-                except Exception as exc:
-                    logger.info("%s[OTP] 验证码输入框已出现，补点发送/重发入口失败，继续检查发信请求：%s", _log_prefix(driver), str(exc)[:160])
-            rows = _log_email_otp_send_probe(driver, "进入取码前")
-            if "email-verification" in url and not clicked_resend and not _email_otp_send_has_success(rows):
-                result = _request_email_otp_send_via_browser(driver, reason="otp_ready_without_send_request")
-                if result.get("ok"):
-                    clicked_resend = True
-                    continue
+            # 输入框已渲染即视为 OTP 流已激活（发信由 authorize 重定向自动完成）。
+            # 不再"取码前补点重发"：实测此时首封验证码通常已在路上/已到达，
+            # 补点重发会作废已发出的验证码并引入新竞态。
             return _email_otp_wait_after_ts(driver, prefer_after_ts)
         if _is_signup_password_page(driver) or _is_login_password_page(driver):
             result = _click_passwordless_signup_if_present(driver)
@@ -1619,21 +1713,9 @@ def _ensure_email_otp_ready_once(driver, email: str, timeout: int = 35, prefer_a
         state = _email_otp_page_state(driver)
         last = state
         url = str(state.get("url") or "").lower()
-        if "email-verification" in url and not clicked_resend:
-            try:
-                result = _click_resend_email_otp(driver, timeout=4)
-                if result.get("ok"):
-                    clicked_resend = True
-                    logger.info("%s[OTP] 验证码页外壳已补点发送/重发入口：%s", _log_prefix(driver), result)
-                    _log_email_otp_send_probe(driver, "验证码页外壳补点发送/重发后")
-                    continue
-            except RuntimeError as exc:
-                msg = str(exc)
-                if "会话已失效" in msg or "跳回登录页" in msg:
-                    raise
-                logger.info("%s[OTP] 验证码页外壳暂未找到发送/重发入口，继续等待输入框：%s", _log_prefix(driver), msg[:160])
-            except Exception as exc:
-                logger.info("%s[OTP] 验证码页外壳暂未找到发送/重发入口，继续等待输入框：%s", _log_prefix(driver), str(exc)[:160])
+        # 验证码页外壳不再补点重发：首封验证码由 authorize 重定向自动发出
+        # （邮箱侧实测已到），这里每次多余的 auth.openai.com 交互都是一次
+        # 触发 Cloudflare 挑战的机会。只等输入框出现，交互留给取码后的提交。
         time.sleep(0.8)
     raise RuntimeError(
         f"等待邮箱验证码输入框/发信入口超时：email={email}, "
@@ -1707,8 +1789,18 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
                 time.sleep(random.uniform(1.1, 2.4) if _browser_actions_enabled() else 1.5)
                 rows = _log_email_otp_send_probe(driver, "点击重新发送验证码按钮后")
                 if not _email_otp_send_has_success(rows):
-                    logger.info("%s[OTP][请求] 点击重发按钮后未观测到成功发信请求，尝试直接调用发信接口", _log_prefix(driver))
-                    _request_email_otp_send_via_browser(driver, reason="resend_button_without_send_request")
+                    # 导航到 email-otp/send 接口 URL 会把 auth.openai.com 拖入 Cloudflare
+                    # 验证循环（实测无头模式几乎必挂，详见 _ensure_email_otp_ready_once 注释）。
+                    # 默认改为原地等页面自身行为；确有需要再开 OTP_SEND_NAV_API_WHEN_UNCONFIRMED。
+                    if bool(getattr(_cfg, "OTP_SEND_NAV_API_WHEN_UNCONFIRMED", False)):
+                        logger.info("%s[OTP][请求] 点击重发按钮后未观测到成功发信请求，尝试直接调用发信接口", _log_prefix(driver))
+                        _request_email_otp_send_via_browser(driver, reason="resend_button_without_send_request")
+                    else:
+                        logger.info(
+                            "%s[OTP][请求] 点击重发按钮后未观测到成功发信请求；"
+                            "保持当前页面等待（导航强发默认已关闭，避免触发 Cloudflare 验证）",
+                            _log_prefix(driver),
+                        )
                 # 点击后确认仍在验证码流程内：连续验证码错误可能已使 OTP 会话失效，
                 # 被服务端踢回登录页，此时继续等只会白白耗完剩余轮次。
                 try:
@@ -1751,6 +1843,17 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
         if not _is_email_verification_page(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
+        # OpenAI 服务端偶发返回路由错误页（如 "Route Error (400 Invalid content type:
+        # text/html; charset=UTF-8)"，实测提交验证码时前端走了原生表单 POST）。
+        # 该页不会自行恢复，errors 字段又是空的，必须显式识别并按 invalid 处理，
+        # 让上层重新提交邮箱开新一轮 OTP，否则会被误判 accepted 后死等资料页。
+        page_text = str(last.get("text") or "")
+        if "oops, an error occurred" in page_text.lower() or "route error (400" in page_text.lower():
+            logger.warning(
+                "%s[OTP] 提交后验证码页出现服务端路由错误页，按 route_error 处理 snapshot=%s",
+                _log_prefix(driver), str(last)[:260],
+            )
+            return 'route_error'
         # 账号已废（account_deactivated/deleted/banned）：验证码即使正确也无法通过，
         # 重发/重试无意义，返回 'deactivated' 让上层直接抛 AccountUnusableError 剔除邮箱。
         dead_text = " ".join([
@@ -1792,8 +1895,97 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
     return 'accepted'
 
 
+def _retry_otp_same_code_after_route_error(driver, code: str) -> bool:
+    """路由错误页轻量恢复：点 Try again（或刷新）后重填同一验证码再提交。
+
+    路由错误页（Oops, an error occurred! / Route Error 400）自带 Try again 按钮，
+    相比整轮重开（重新提交邮箱→authorize→可能撞 Cloudflare），这是成本最低的
+    恢复手段。返回 True 表示已重新提交、调用方应继续等待页面结果。
+    """
+    prefix = _log_prefix(driver)
+    clicked_try_again = False
+    try:
+        btn = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+        const buttons = [...document.querySelectorAll('button,[role=button],a')].filter(visible);
+        const hit = buttons.find(el => {
+          const t = (el.innerText || '').trim().toLowerCase();
+          const action = String(el.getAttribute('data-dd-action-name') || '').toLowerCase();
+          return t === 'try again' || action === 'try again';
+        });
+        if (hit) { hit.scrollIntoView({block:'center'}); return hit; }
+        return null;
+        """)
+        if btn:
+            _human_click(driver, btn, label="route_error_try_again")
+            clicked_try_again = True
+            logger.info("%s[OTP] 路由错误页已点击 Try again", prefix)
+    except Exception as exc:
+        logger.debug("%s[OTP] 点击 Try again 失败，改为刷新验证码页：%s", prefix, exc)
+    if not clicked_try_again:
+        _refresh_or_reopen(
+            driver,
+            "https://auth.openai.com/email-verification",
+            timeout=25,
+            accept_hosts=("auth.openai.com",),
+        )
+    # 等验证码输入框回来（期间可能经过 Cloudflare 挑战）。
+    end = time.time() + 45
+    while time.time() < end:
+        if _is_cloudflare_challenge_page(driver):
+            _wait_cloudflare_challenge_clear(driver, timeout=60)
+        if _email_otp_input_present(driver):
+            break
+        time.sleep(1)
+    if not _email_otp_input_present(driver):
+        logger.warning("%s[OTP] 路由错误页恢复失败：验证码输入框未回来", prefix)
+        return False
+    try:
+        _clear_otp_inputs(driver)
+        _type_otp(driver, code)
+        human_delay("otp_input")
+        _click_continue(driver)
+        logger.info("%s[OTP] 路由错误页恢复：已重填同一验证码并提交", prefix)
+        return True
+    except Exception as exc:
+        logger.warning("%s[OTP] 路由错误页恢复失败：%s", prefix, exc)
+        return False
+
+
+def _wait_react_hydrated(driver, el, timeout: float = 8.0) -> bool:
+    """等 React 完成 hydration（节点挂上 __reactProps$/__reactFiber$）再点击。
+
+    认证页是 React SPA：hydration 完成前表单提交按钮没有 JS handler，
+    点击会触发浏览器原生表单 POST，auth 服务端返回
+    "Route Error (400 Invalid content type: text/html; charset=UTF-8)"。
+    慢网络（代理出口）下 JS bundle 加载比我们的操作慢，实测每次都命中。
+    """
+    try:
+        end = time.time() + max(0.0, float(timeout))
+        while True:
+            hydrated = driver.execute_script(r"""
+            const el = arguments[0];
+            if (!el) return false;
+            const keys = Object.keys(el);
+            return keys.some(k => k.startsWith('__reactProps$') || k.startsWith('__reactFiber$'));
+            """, el)
+            if hydrated:
+                return True
+            if time.time() >= end:
+                logger.warning(
+                    "%s 等待 React hydration 超时（%.0fs），继续点击（可能出现路由错误页）",
+                    _log_prefix(driver), timeout,
+                )
+                return False
+            time.sleep(0.3)
+    except Exception as exc:
+        logger.debug("%s hydration 检测失败，直接点击：%s", _log_prefix(driver), exc)
+        return False
+
+
 def _click_continue(driver) -> None:
-    _click_any(driver, [
+    el = _find_any(driver, [
         "button[type='submit']",
         "//button[@data-dd-action-name='Continue']",
         "//button[@data-dd-action-name='continue']",
@@ -1805,6 +1997,8 @@ def _click_continue(driver) -> None:
         "//button[contains(., 'Create')]",
         "//button[contains(., 'Next')]",
     ], timeout=20)
+    _wait_react_hydrated(driver, el)
+    _human_click(driver, el, label="continue")
 
 
 def _maybe_accept(driver) -> None:
@@ -2240,6 +2434,9 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         """) or {"ok": False, "reason": "empty_result"}
         if result.get("ok") and result.get("button"):
             _mark_email_otp_trigger(driver, "passwordless_send_otp")
+            # 该按钮是 form 提交按钮（name=intent）；hydration 未完成时点击会走
+            # 原生表单 POST，auth 服务端返回路由错误页。
+            _wait_react_hydrated(driver, result.get("button"))
             _human_click(driver, result.get("button"), label="passwordless_otp")
             time.sleep(random.uniform(1.0, 2.0) if _browser_actions_enabled() else 1.0)
             _log_email_otp_send_probe(driver, "点击一次性验证码入口后")
@@ -2287,6 +2484,7 @@ def _click_continue_with_password_if_present(driver) -> dict:
         };
         """) or {"ok": False, "reason": "empty_result"}
         if result.get("ok") and result.get("button"):
+            _wait_react_hydrated(driver, result.get("button"))
             _human_click(driver, result.get("button"), label="continue_with_password")
             result["reason"] = "clicked_continue_with_password"
             result.pop("button", None)
@@ -2403,6 +2601,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         """) or {}
         if not submit_result.get("ok") or not submit_result.get("button"):
             raise RuntimeError(f"密码页找不到可点击的 Continue 按钮：{submit_result} state={_password_page_state(driver)}")
+        _wait_react_hydrated(driver, submit_result.get("button"))
         _human_click(driver, submit_result.get("button"), label="password_submit")
         logger.info("%s 已填写并点击密码页 Continue：detail=%s", _log_prefix(driver), {k: v for k, v in submit_result.items() if k != "button"})
         # 提交密码后通常进入邮箱验证码页，最多等一段时间。
@@ -2507,6 +2706,13 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
         if _has_access_token(driver):
             logger.info('%s 已检测到登录态，资料页可能已跳过', _log_prefix(driver))
             return False
+        # Cloudflare 挑战页：原地等放行，不刷新（刷新会重置挑战并可能陷入验证循环）。
+        if _is_cloudflare_challenge_page(driver):
+            cf_budget = max(30, int(getattr(_cfg, "CF_CHALLENGE_WAIT_SECONDS", 90) or 90))
+            logger.warning('%s 等待资料页时被 Cloudflare 拦截，原地等放行（最长 %ss）', _log_prefix(driver), cf_budget)
+            _wait_cloudflare_challenge_clear(driver, timeout=cf_budget)
+            stale_since = None
+            continue
         snap = _page_snapshot(driver)
         last_snapshot = snap
         if not _is_profile_like(snap):
@@ -2744,6 +2950,12 @@ def run_roxy_registration(
     openai_password: str | None = None
     registration_country = ""
     try:
+        # 兜底清扫历史崩溃遗留的临时环境：上次进程中断时 finally 可能没执行，
+        # 孤儿环境会占满 Roxy 环境配额，导致后续任务创建环境失败。
+        try:
+            sweep_orphan_profiles()
+        except Exception as sweep_exc:
+            logger.warning("[Roxy注册] 孤儿环境清扫失败（不影响本次注册）：%s", sweep_exc)
         # 环境级重试：代理池是同一网关下的多个 sticky sid，某个 sid 闪断时
         # 浏览器内重试救不回来（ERR_SOCKS_CONNECTION_FAILED 会连吃满所有次数）；
         # 销毁环境换一个 sid 重建是唯一有效的恢复手段。此阶段尚未领取邮箱，
@@ -2888,6 +3100,30 @@ def run_roxy_registration(
                     current_otp = None
                     continue
             logger.info("[Roxy注册][OTP] 收到验证码：%s", current_otp)
+            if not _email_otp_input_present(driver):
+                # 恢复梯度：先原地恢复（Try again/刷新验证码页 + 重填同一验证码），
+                # 失败才整轮重开（重新提交邮箱的 authorize 跳转可能撞 Cloudflare）。
+                logger.warning("[Roxy注册][OTP] 取到验证码时页面已离开验证码输入页，先尝试原地恢复")
+                if _retry_otp_same_code_after_route_error(driver, current_otp):
+                    if _wait_after_email_otp_submit(driver, timeout=30) == 'accepted':
+                        break
+                if otp_attempt >= max_otp_attempts:
+                    raise RuntimeError("验证码已到手但页面已不在验证码输入页，且恢复失败，重试次数已用完")
+                logger.warning(
+                    "[Roxy注册][OTP] 原地恢复未成功，重新提交邮箱触发新一轮 OTP（下一轮 %s/%s）",
+                    otp_attempt + 1, max_otp_attempts,
+                )
+                restart_ts, restart_password = _restart_email_otp_flow(
+                    driver,
+                    email,
+                    reason="取码后页面已离开验证码输入页",
+                )
+                otp_after_ts = restart_ts
+                first_otp_after_ts = restart_ts
+                if restart_password:
+                    openai_password = restart_password
+                current_otp = None
+                continue
             _clear_otp_inputs(driver)
             _type_otp(driver, current_otp)
             logger.info("[Roxy注册][OTP] 已填写邮箱验证码")
@@ -2906,6 +3142,12 @@ def run_roxy_registration(
                 )
             if outcome == 'accepted':
                 break
+            if outcome == 'route_error' and current_otp:
+                # 路由错误页：优先点 Try again 重填同一验证码，避免整轮重开撞 Cloudflare。
+                logger.warning("[Roxy注册][OTP] 提交后出现路由错误页，先尝试 Try again 重填同一验证码")
+                if _retry_otp_same_code_after_route_error(driver, current_otp):
+                    if _wait_after_email_otp_submit(driver, timeout=30) == 'accepted':
+                        break
             if otp_attempt >= max_otp_attempts:
                 raise RuntimeError("邮箱验证码连续错误/过期，已达到最大重试次数")
             logger.warning("[Roxy注册][OTP] 验证码错误/过期，重新提交同一邮箱触发新 OTP（%s/%s）", otp_attempt + 1, max_otp_attempts)

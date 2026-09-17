@@ -308,6 +308,78 @@ class RunRebindReleaseTests(unittest.TestCase):
         self.assertEqual(row["status"], "failed")
 
 
+class ProxyRetryTests(unittest.TestCase):
+    """代理出口级故障（curl 97 等）换代理重跑；业务失败不重跑。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self._patches = [
+            patch.object(db, "_ACCOUNTS_JSON", root / "accounts.json"),
+            patch.object(db, "_ACCOUNTS_TXT", root / "accounts.txt"),
+            patch.object(db, "_TOKENS_TXT", root / "tokens.txt"),
+            patch.object(db, "_VIEWER_HTML", root / "viewer.html"),
+            patch.object(db, "_REBIND_EMAIL_JSON", root / "rebind.json"),
+            patch.object(db, "_REBIND_EMAIL_TXT", root / "rebind.txt"),
+        ]
+        for p in self._patches:
+            p.start()
+            self.addCleanup(p.stop)
+        (root / "accounts.json").write_text(
+            json.dumps([{"id": 1, "email": "old@test.com", "access_token": ""}]), encoding="utf-8"
+        )
+        db.import_rebind_emails([{"email": "new@test.com", "code_url": "https://x/c"}])
+        # 重试间隔不打断测试节奏。
+        sleeper = patch.object(rebind_service.time, "sleep", return_value=None)
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+
+    def test_proxy_failure_retries_with_new_proxy_then_succeeds(self):
+        calls = {"count": 0}
+
+        def fake_once(**kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return {"ok": False, "success": False, "email": "old@test.com",
+                        "stage": "login_old", "new_email": None,
+                        "error": "ProxyError: Failed to perform, curl: (97) connection to proxy closed"}
+            return {"ok": True, "success": True, "email": "old@test.com",
+                    "stage": "relogin", "new_email": "new@test.com", "error": None}
+
+        with patch.object(rebind_service, "_run_rebind_once", side_effect=fake_once):
+            result = rebind_service.run_rebind(account_id=1, email="old@test.com", source="pool")
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls["count"], 2)
+
+    def test_business_failure_does_not_retry(self):
+        calls = {"count": 0}
+
+        def fake_once(**kwargs):
+            calls["count"] += 1
+            return {"ok": False, "success": False, "email": "old@test.com",
+                    "stage": "change_email", "new_email": "new@test.com",
+                    "error": "ChangeEmailError: 换绑验证码重试耗尽"}
+
+        with patch.object(rebind_service, "_run_rebind_once", side_effect=fake_once):
+            result = rebind_service.run_rebind(account_id=1, email="old@test.com", source="pool")
+        self.assertFalse(result["ok"])
+        self.assertEqual(calls["count"], 1)
+
+    def test_failure_after_claiming_new_email_does_not_retry(self):
+        calls = {"count": 0}
+
+        def fake_once(**kwargs):
+            calls["count"] += 1
+            return {"ok": False, "success": False, "email": "old@test.com",
+                    "stage": "relogin", "new_email": "new@test.com",
+                    "error": "ProxyError: Failed to perform, curl: (97) connection to proxy closed"}
+
+        with patch.object(rebind_service, "_run_rebind_once", side_effect=fake_once):
+            result = rebind_service.run_rebind(account_id=1, email="old@test.com", source="pool")
+        self.assertFalse(result["ok"])
+        self.assertEqual(calls["count"], 1)
+
+
 class TokenPathTests(unittest.TestCase):
     """有可用 accessToken 时跳过旧邮箱登录；token 过期/被拒时回退登录。"""
 

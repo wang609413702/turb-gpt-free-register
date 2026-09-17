@@ -203,6 +203,29 @@ def _relogin_new_email(
     return result
 
 
+def _is_proxy_level_failure(exc: BaseException) -> bool:
+    """代理出口本身不可用（连接被拒/被关/超时），换一个代理出口重试可能恢复。
+
+    与 _is_transient_network_error 的区别：临时分类会在同一个会话上原地重试；
+    这里识别的是代理级故障，同一出口继续重试大概率仍失败，需要换出口。
+    """
+    from core.openai_auth import _is_transient_network_error
+
+    text = str(exc or "")
+    lowered = text.lower()
+    proxy_fatal_markers = (
+        "curl: (97)",            # connection to proxy closed
+        "curl: (7)",             # couldn't connect to proxy
+        "proxy closed",
+        "connection to proxy",
+        "connection refused",
+        "connection reset",
+        "timed out",
+        "tunnel connection failed",
+    )
+    return "proxyerror" in type(exc).__name__.lower() or any(m in lowered for m in proxy_fatal_markers) or _is_transient_network_error(exc)
+
+
 def run_rebind(
     *,
     account_id: int,
@@ -220,6 +243,47 @@ def run_rebind(
                       跳过旧邮箱登录（begin 返回 401/403 才回退登录）
         proxy: 代理；None=从「代理池(每行一个)」随机抽取，""=直连
     """
+    session = None
+    pool_row: dict | None = None
+    claimed_pool_email: str | None = None
+    # 代理出口级故障（连接被关/拒绝/超时）换代理重试；同一出口原地重试救不了。
+    max_proxy_attempts = 3 if proxy is None else 1
+    last_result: dict | None = None
+    for proxy_attempt in range(1, max_proxy_attempts + 1):
+        last_result = _run_rebind_once(
+            account_id=account_id, email=email, source=source,
+            stored_token=stored_token, proxy=proxy,
+            proxy_attempt=proxy_attempt, max_proxy_attempts=max_proxy_attempts,
+        )
+        error_text = str(last_result.get("error") or "")
+        if (
+            last_result.get("ok")
+            or proxy_attempt >= max_proxy_attempts
+            or not _is_proxy_level_failure(RuntimeError(error_text))
+        ):
+            return last_result
+        # 只有尚未领取新邮箱的失败才安全重试；已开始换绑的失败重跑会浪费邮箱。
+        if last_result.get("new_email"):
+            logger.warning("[换绑] 已领取新邮箱后失败，不换代理重跑，避免重复领邮箱")
+            return last_result
+        logger.warning(
+            "[换绑] 代理出口故障（第 %s/%s 次尝试），换一个代理出口重试：%s",
+            proxy_attempt, max_proxy_attempts, error_text[:140],
+        )
+        time.sleep(2.0)
+    return last_result or {"ok": False, "success": False, "error": "换绑未执行"}
+
+
+def _run_rebind_once(
+    *,
+    account_id: int,
+    email: str,
+    source: str,
+    stored_token: str | None,
+    proxy: str | None,
+    proxy_attempt: int,
+    max_proxy_attempts: int,
+) -> dict:
     started_at = _now()
     result = {
         "ok": False,
@@ -234,6 +298,8 @@ def run_rebind(
         "started_at": started_at,
         "completed_at": None,
         "error": None,
+        "proxy_attempt": proxy_attempt,
+        "proxy_attempts_total": max_proxy_attempts,
     }
     session = None
     pool_row: dict | None = None

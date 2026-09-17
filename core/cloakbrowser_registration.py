@@ -25,6 +25,40 @@ from core.roxy_registration import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+# Cloudflare 人机验证中间页的标题特征（多语言）。
+_CF_WAIT_TITLE_MARKS = (
+    "しばらくお待ちください", "Chờ một chút", "Just a moment", "Please wait",
+    "请稍候", "請稍候", "Attention Required", "Checking your browser",
+)
+
+
+def _page_title(driver) -> str:
+    try:
+        return (driver.page.title() or "").strip()
+    except Exception:
+        return ""
+
+
+def _wait_cloudflare_cleared(driver, timeout: int = 75) -> bool:
+    """等待 Cloudflare 人机验证放行；标题离开等待页即视为通过。
+
+    实测放行耗时 20~40 秒（正常浏览器+干净出口），此前流程只给邮箱输入框
+    留 20 秒，验证页还没放行就超时了。出口 IP 信誉差时可能整段超时——
+    属于代理质量问题，重提任务换 session 即可。
+    """
+    end = time.time() + timeout
+    waited = False
+    while time.time() < end:
+        title = _page_title(driver)
+        if title and not any(mark in title for mark in _CF_WAIT_TITLE_MARKS):
+            if waited:
+                logger.info("[Cloak注册] Cloudflare 验证已放行（%d 秒），标题=%s", int(timeout - (end - time.time())), title)
+            return True
+        waited = True
+        time.sleep(1.0)
+    logger.warning("[Cloak注册] Cloudflare 验证 %d 秒未放行，当前标题=%s（建议换代理重试）", timeout, _page_title(driver) or "?")
+    return False
+
 
 def run_cloak_registration(
     email: str | None,
@@ -48,6 +82,7 @@ def run_cloak_registration(
         logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
         driver.get("https://chatgpt.com/auth/login")
         human_delay("navigate")
+        _wait_cloudflare_cleared(driver, timeout=int(getattr(_cfg, "CLOAK_CF_WAIT_TIMEOUT", 75) or 75))
         _maybe_accept(driver)
         _check_manual_stop()
 

@@ -299,6 +299,42 @@ def _wait_for_order_credentials(order: dict) -> tuple[str, str, str]:
 _REUSE_QUEUE_PATH = _PROJECT_ROOT / "remail_reuse_queue.json"
 _REUSE_QUEUE_LOCK = threading.Lock()
 
+# 订单登记表：email -> order_no。service token 只存在服务端订单里，进程重启后
+# 内存上下文清空；按此表按订单号恢复取件上下文，查活/换绑/2FA 收码不因重启中断。
+_ORDER_REGISTRY_PATH = _PROJECT_ROOT / "remail_order_registry.json"
+_ORDER_REGISTRY_LOCK = threading.Lock()
+
+
+def _load_order_registry() -> dict:
+    try:
+        data = json.loads(_ORDER_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_order_registry(registry: dict) -> None:
+    try:
+        _ORDER_REGISTRY_PATH.write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("[Remail] 订单登记表写入失败：%s", exc)
+
+
+def _register_order(order_no: str, email: str) -> None:
+    no = str(order_no or "").strip()
+    target = _cache_key(email)
+    if not no or not target:
+        return
+    with _ORDER_REGISTRY_LOCK:
+        registry = _load_order_registry()
+        if registry.get(target) == no:
+            return
+        registry[target] = no
+        _save_order_registry(registry)
+
 
 def _load_reuse_queue() -> list[dict]:
     try:
@@ -354,6 +390,7 @@ def restore_order_context(order_no: str, email_hint: str = "") -> RemailAccount 
     )
     with _CONTEXT_LOCK:
         _CONTEXT_CACHE[_cache_key(email)] = account
+    _register_order(account.order_no, account.email)
     logger.info("[Remail] 已按订单恢复取件上下文：%s order=%s", email, account.order_no)
     return account
 
@@ -429,6 +466,7 @@ def pick_account() -> RemailAccount:
     )
     with _CONTEXT_LOCK:
         _CONTEXT_CACHE[_cache_key(email)] = account
+    _register_order(order_no, email)
     logger.info("[Remail] 已创建邮箱订单: %s order=%s project=%s", email, order_no or "-", project_id)
     return account
 
@@ -439,8 +477,17 @@ def get_email() -> str:
 
 
 def get_account_context(email: str) -> RemailAccount | None:
+    key = _cache_key(email)
     with _CONTEXT_LOCK:
-        return _CONTEXT_CACHE.get(_cache_key(email))
+        account = _CONTEXT_CACHE.get(key)
+    if account is not None:
+        return account
+    # 进程重启后内存上下文清空；按本地订单登记表恢复，避免收码中断。
+    with _ORDER_REGISTRY_LOCK:
+        order_no = _load_order_registry().get(key)
+    if not order_no:
+        return None
+    return restore_order_context(str(order_no), str(email or ""))
 
 
 def _requeue_account(account: RemailAccount, note: str | None = None) -> None:
@@ -663,15 +710,30 @@ def _suffix_inventory_entry(product: dict, suffix: str) -> dict | None:
     return None
 
 
+def _product_price_for_mode(product: dict) -> float | None:
+    """按服务模式取商品单价（purchase→purchasePrice / code→codePrice）。
+
+    接口未返回价格或无法解析时返回 None，由上层退回手动配置的邮箱单价。
+    """
+    key = "purchasePrice" if _service_mode() == "purchase" else "codePrice"
+    raw = product.get(key)
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 _INVENTORY_CACHE: dict = {}
 _INVENTORY_CACHE_LOCK = threading.Lock()
 
 
 def fetch_suffix_inventory(suffix: str | None = None, *, force: bool = False) -> dict:
-    """查询项目详情，返回配置邮箱后缀的实时库存。
+    """查询项目详情，返回配置邮箱后缀的实时库存与单价。
 
-    返回 {suffix, product_type, total_available, public_available, available}；
+    返回 {suffix, product_type, total_available, public_available, available, price}；
     available 按库存策略取值：public_only 取公开库存，private_first 取总库存。
+    price 按服务模式取商品单价，接口未返回时为 None。
     结果短 TTL 缓存，避免概览与前端轮询同时打到 Remail API。
     """
     target = str(suffix if suffix is not None else _email_suffix()).strip().lstrip("@").lower()
@@ -692,28 +754,25 @@ def fetch_suffix_inventory(suffix: str | None = None, *, force: bool = False) ->
         raise RemailError("Remail 项目详情响应缺少商品列表")
 
     matched_type = _product_type_for_suffix(target)
-    type_product = None
+    matched_product = None
     for product in products:
-        entry = _suffix_inventory_entry(product, target)
-        if entry is not None:
-            result = {
-                "suffix": target,
-                "product_type": str(product.get("type") or matched_type),
-                "total_available": int(entry.get("totalAvailable") or 0),
-                "public_available": int(entry.get("publicAvailable") or 0),
-            }
+        if _suffix_inventory_entry(product, target) is not None:
+            matched_product = product
             break
-        if str(product.get("type") or "") == matched_type and type_product is None:
-            type_product = product
-    else:
-        if type_product is None:
-            raise RemailError(f"Remail 项目商品中找不到后缀 {target} 的库存信息")
-        result = {
-            "suffix": target,
-            "product_type": matched_type,
-            "total_available": int(type_product.get("totalAvailable") or 0),
-            "public_available": int(type_product.get("publicAvailable") or 0),
-        }
+        if str(product.get("type") or "") == matched_type and matched_product is None:
+            matched_product = product
+    if matched_product is None:
+        raise RemailError(f"Remail 项目商品中找不到后缀 {target} 的库存信息")
+
+    entry = _suffix_inventory_entry(matched_product, target)
+    total_source = entry if entry is not None else matched_product
+    result = {
+        "suffix": target,
+        "product_type": str(matched_product.get("type") or matched_type),
+        "total_available": int(total_source.get("totalAvailable") or 0),
+        "public_available": int(total_source.get("publicAvailable") or 0),
+        "price": _product_price_for_mode(matched_product),
+    }
 
     result["available"] = (
         result["total_available"]
@@ -723,6 +782,53 @@ def fetch_suffix_inventory(suffix: str | None = None, *, force: bool = False) ->
     with _INVENTORY_CACHE_LOCK:
         _INVENTORY_CACHE[target] = (time.monotonic(), result)
     return result
+
+
+_WALLET_CACHE: dict = {}
+_WALLET_CACHE_LOCK = threading.Lock()
+
+
+def fetch_wallet(*, force: bool = False) -> dict:
+    """查询钱包，返回 {balance, updated_at}；balance 取消费者余额。
+
+    缓存 TTL 与库存查询一致（库存查询间隔的一半，3~30 秒），
+    force=True 时绕过缓存实时查询，供开始注册前的余额校验使用。
+    """
+    ttl = max(3, min(inventory_query_seconds() // 2, 30))
+    now = time.monotonic()
+    with _WALLET_CACHE_LOCK:
+        cached = _WALLET_CACHE.get("wallet")
+        if cached and not force and now - cached[0] < ttl:
+            return cached[1]
+
+    payload = _request("GET", "/v1/open/wallet")
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+    if not isinstance(payload, dict):
+        raise RemailError("Remail 钱包响应不是对象")
+    raw_balance = _first_value(payload, "consumerBalance", "consumer_balance", "balance")
+    try:
+        balance = round(float(str(raw_balance).strip()), 2)
+    except (TypeError, ValueError) as exc:
+        raise RemailError(f"Remail 钱包余额无法解析: {raw_balance!r}") from exc
+    result = {
+        "balance": balance,
+        "updated_at": str(payload.get("updatedAt") or payload.get("updated_at") or ""),
+    }
+    with _WALLET_CACHE_LOCK:
+        _WALLET_CACHE["wallet"] = (time.monotonic(), result)
+    return result
+
+
+def reuse_queue_count() -> int:
+    """失败邮箱复用队列长度，供注册前余额校验排除复用邮箱；复用关闭时恒为 0。"""
+    try:
+        enabled = bool(getattr(_email_cfg, "REMAIL_REUSE_FAILED_EMAILS", False))
+    except Exception:
+        enabled = False
+    if not enabled:
+        return 0
+    return len(_load_reuse_queue())
 
 
 def list_projects(*, search: str | None = None, product_type: str | None = "microsoft") -> list[dict]:

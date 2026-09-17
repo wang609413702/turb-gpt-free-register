@@ -13,6 +13,7 @@ from config.env_loader import apply_env_overrides
 from config.trial import TRIAL_PROXY_POOL_NAMES, TRIAL_REGIONS
 from urllib.parse import quote
 import random
+import re
 
 
 # 本地代理入口；实际出口地区以代理/分流规则为准。
@@ -57,15 +58,16 @@ TRIAL_JP_PROXY_POOL: list[str] = []
 # 查 GB 试用资格专用代理池（GB 出口），与 JP 池隔离，单独轮换。格式同上。
 TRIAL_GB_PROXY_POOL: list[str] = []
 
-# 查 DE/BR/TH/PH/ID/VN 试用资格的地区专用代理池，彼此及支付检测池完全隔离。格式同上。
+# 查 DE/BR/TH/PH/ID/VN/IN 试用资格的地区专用代理池，彼此及支付检测池完全隔离。格式同上。
 TRIAL_DE_PROXY_POOL: list[str] = []
 TRIAL_BR_PROXY_POOL: list[str] = []
 TRIAL_TH_PROXY_POOL: list[str] = []
 TRIAL_PH_PROXY_POOL: list[str] = []
 TRIAL_ID_PROXY_POOL: list[str] = []
 TRIAL_VN_PROXY_POOL: list[str] = []
+TRIAL_IN_PROXY_POOL: list[str] = []
 
-# 注册完成后自动查试用资格使用的默认地区：jp/gb/de/br/th/ph/id/vn。
+# 注册完成后自动查试用资格使用的默认地区：jp/gb/de/br/th/ph/id/vn/in。
 # 选哪个地区，注册完就走哪个地区的试用代理池查询；值无效时回退 jp。
 TRIAL_CHECK_DEFAULT_REGION: str = "jp"
 
@@ -79,7 +81,16 @@ GCASH_CUSTOM_PAYMENT_METHOD_IDS: list[str] = []
 # 留空 = 只要出现自定义支付方式即视为支持 GoPay；也可填已知 cpmt_ 白名单（每行一个）精确匹配。
 GOPAY_CUSTOM_PAYMENT_METHOD_IDS: list[str] = []
 
-# 支付检测通用网络参数，所有支付方式检测共用（MoMo/GCash/Kakao/PayPal-BR/TH/DE/IDEAL/GoPay）：
+# UPI 检测专用代理池（IN 出口），与 MoMo/GCash/Kakao/PayPal/IDEAL/GoPay 代理池隔离，单独轮换。
+# 格式同上。留空则 UPI 检测直连。
+UPI_PROXY_POOL: list[str] = []
+
+# UPI 检测：IN/INR 若返回 OpenAI 自定义结账（oaics_），UPI 只出现在
+# custom_payment_methods（cpmt_*），不在 payment_method_types 里。
+# 留空 = 只要出现自定义支付方式即视为支持 UPI；也可填已知 cpmt_ 白名单（每行一个）精确匹配。
+UPI_CUSTOM_PAYMENT_METHOD_IDS: list[str] = []
+
+# 支付检测通用网络参数，所有支付方式检测共用（MoMo/GCash/Kakao/PayPal-BR/TH/DE/IDEAL/GoPay/UPI）：
 #   MOMO_CHECK_TIMEOUT      单次请求超时（秒），运行时钳制 1-60
 #   MOMO_CHECK_MAX_ATTEMPTS 总尝试次数（含首次），钳制 1-6；超时/网络类失败换代理重试
 #   MOMO_CHECK_RETRY_DELAY  重试等待基准（秒），线性递增（第1次重试等 1×基准，第2次等 2×基准），钳制 0-30
@@ -104,6 +115,12 @@ PLAN_CHECK_PROXY_MODE = "auto"
 # 代理可能包含账号密码，因此 WebUI 会把它保存到 .env。
 PLAN_CHECK_PROXY = ""
 
+# 查活（登录态检查）网络模式。留空=跟随套餐/Agent 网络模式；
+#   proxy  = 复用套餐查询专用代理（PLAN_CHECK_PROXY 或代理池）
+#   direct = 走本地网络/VPN，不经代理
+#   auto   = 本地代理端口未监听时回退直连
+LIVE_CHECK_PROXY_MODE = ""
+
 # 查套餐 / 生成 Codex Agent Token 使用独立的短超时和有限重试，避免后台任务长时间卡住。
 PLAN_CHECK_TIMEOUT = 15.0
 PLAN_CHECK_MAX_ATTEMPTS = 2
@@ -120,17 +137,44 @@ PLAN_CHECK_QUEUE_LIMIT = 500
 PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
-# 查试用资格（JP/GB/DE/BR/TH/PH/VN）后台队列参数，与套餐查询队列隔离。
+# 查试用资格（JP/GB/DE/BR/TH/PH/VN/IN）后台队列参数，与套餐查询队列隔离。
 # 请求超时/重试沿用 PLAN_CHECK_TIMEOUT / PLAN_CHECK_MAX_ATTEMPTS / PLAN_CHECK_RETRY_DELAY。
 TRIAL_CHECK_WORKERS = 3
 TRIAL_CHECK_QUEUE_LIMIT = 200
 TRIAL_CHECK_MIN_INTERVAL = 0.4
 TRIAL_CHECK_JITTER = 0.3
 
+# 账号查活后台并发数（1-16）。配置页修改后下一次入队生效，无需重启。
+LIVE_CHECK_WORKERS = 3
+
+
+# 领取代理时随机化用户名里的会话段（session-XXXXXX）：711proxy 等网关代理
+# 用 session 编号绑定粘性出口 IP，固定编号意味着出口 IP 永远是同一批，连续
+# 注册后会被 CF/风控按 IP 烧掉信誉。开启后每次领取都换新会话=新出口 IP。
+PROXY_SESSION_ROTATE = True
+
+
+def _rotate_proxy_session(url: str) -> str:
+    """把代理 URL 用户名里的 session-数字 替换为随机新会话（无该模式则原样返回）。"""
+    if "session-" not in str(url):
+        return url
+    return re.sub(
+        r"session-\d+",
+        lambda m: f"session-{random.randrange(10_000_000, 99_999_999)}",
+        url,
+        count=1,
+    )
+
 
 def pick_proxy() -> str:
-    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
-    return random.choice(PROXY_POOL) if PROXY_POOL else ""
+    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。
+
+    PROXY_SESSION_ROTATE=True 时同时随机化会话编号，每次领取拿到新出口 IP。
+    """
+    proxy = random.choice(PROXY_POOL) if PROXY_POOL else ""
+    if proxy and PROXY_SESSION_ROTATE:
+        proxy = _rotate_proxy_session(proxy)
+    return proxy
 
 
 def _build_proxy_url(scheme: str, host: str, port: str, user: str = "", password: str = "") -> str:
@@ -267,6 +311,15 @@ def pick_gopay_proxy() -> str:
     return random.choice(valid) if valid else ""
 
 
+def pick_upi_proxy() -> str:
+    """从 UPI 检测代理池中随机抽取并归一化一个代理 URL；池为空返回空串（直连）。"""
+    if not UPI_PROXY_POOL:
+        return ""
+    proxies = [normalize_proxy(line) for line in UPI_PROXY_POOL]
+    valid = [p for p in proxies if p]
+    return random.choice(valid) if valid else ""
+
+
 def default_trial_region() -> str:
     """注册后自动查试用资格的默认地区；配置值无效时回退 jp。"""
     value = str(TRIAL_CHECK_DEFAULT_REGION or "").strip().lower()
@@ -295,7 +348,7 @@ PROXY = pick_proxy()
 
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {
-    'PROXY_POOL': 'list_str_multiline',
+    'PROXY_POOL': 'list_str_multiline', 'PROXY_SESSION_ROTATE': 'bool',
     'MOMO_PROXY_POOL': 'list_str_multiline',
     'GCASH_PROXY_POOL': 'list_str_multiline',
     'KAKAO_PROXY_POOL': 'list_str_multiline',
@@ -304,6 +357,7 @@ apply_env_overrides(globals(), {
     'PAYPAL_DE_PROXY_POOL': 'list_str_multiline',
     'IDEAL_PROXY_POOL': 'list_str_multiline',
     'GOPAY_PROXY_POOL': 'list_str_multiline',
+    'UPI_PROXY_POOL': 'list_str_multiline',
     'TRIAL_CHECK_DEFAULT_REGION': 'str',
     'TRIAL_JP_PROXY_POOL': 'list_str_multiline',
     'TRIAL_GB_PROXY_POOL': 'list_str_multiline',
@@ -313,7 +367,9 @@ apply_env_overrides(globals(), {
     'TRIAL_PH_PROXY_POOL': 'list_str_multiline',
     'TRIAL_ID_PROXY_POOL': 'list_str_multiline',
     'TRIAL_VN_PROXY_POOL': 'list_str_multiline',
+    'TRIAL_IN_PROXY_POOL': 'list_str_multiline',
     'GOPAY_CUSTOM_PAYMENT_METHOD_IDS': 'list_str_multiline',
+    'UPI_CUSTOM_PAYMENT_METHOD_IDS': 'list_str_multiline',
     'MOMO_CHECK_TIMEOUT': 'float',
     'MOMO_CHECK_MAX_ATTEMPTS': 'int',
     'MOMO_CHECK_RETRY_DELAY': 'float',
@@ -330,9 +386,13 @@ apply_env_overrides(globals(), {
     'IDEAL_CHECK_QUEUE_LIMIT': 'int',
     'GOPAY_CHECK_WORKERS': 'int',
     'GOPAY_CHECK_QUEUE_LIMIT': 'int',
+    'UPI_CHECK_WORKERS': 'int',
+    'UPI_CHECK_QUEUE_LIMIT': 'int',
     'GCASH_CUSTOM_PAYMENT_METHOD_IDS': 'list_str_multiline',
     'PLAN_CHECK_PROXY_MODE': 'str',
     'PLAN_CHECK_PROXY': 'str',
+    'LIVE_CHECK_PROXY_MODE': 'str',
+    'LIVE_CHECK_WORKERS': 'int',
     'PLAN_CHECK_TIMEOUT': 'float',
     'PLAN_CHECK_MAX_ATTEMPTS': 'int',
     'PLAN_CHECK_RETRY_DELAY': 'float',

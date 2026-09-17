@@ -8,9 +8,12 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ENV_PATH = _PROJECT_ROOT / ".env"
@@ -249,3 +252,37 @@ def apply_env_overrides(namespace: dict, schema: dict[str, str] | None = None) -
         default = namespace.get(key)
         vtype = schema.get(key) if schema else None
         namespace[key] = env_value(key, default, vtype)
+
+
+def reload_config_modules() -> list[str]:
+    """重新加载 config 包下的配置模块，让 WebUI 保存的值不重启立即生效。
+
+    config/*.py 只在 import 时用 apply_env_overrides 把 .env 值写进模块 globals；
+    WebUI 保存只更新 .env/os.environ，已加载模块的属性不会变——注册等运行路径
+    用 getattr(_cfg, KEY) 读的是模块属性，导致"改了配置但注册还在用旧值"。
+    这里逐个 reload config/*.py（模块属性原地更新，`from config import x as _cfg`
+    持有的模块引用仍指向同一对象，读到的就是新值）。单个模块失败不影响其余。
+    """
+    import importlib
+    import pkgutil
+
+    import config as _pkg
+
+    reloaded: list[str] = []
+    for mod_info in pkgutil.iter_modules(_pkg.__path__):
+        if mod_info.name in ("__init__", "env_loader"):
+            continue
+        module_name = f"config.{mod_info.name}"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:
+            logger.warning("配置模块 %s 导入失败，跳过热重载：%s", module_name, exc)
+            continue
+        try:
+            importlib.reload(module)
+            reloaded.append(module_name)
+        except Exception as exc:
+            logger.warning("配置模块 %s 热重载失败（继续使用旧值）：%s", module_name, exc)
+    if reloaded:
+        logger.info("已热重载配置模块：%s", ", ".join(reloaded))
+    return reloaded

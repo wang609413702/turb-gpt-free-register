@@ -135,6 +135,19 @@ def resolve_email_source(email: str) -> str:
         return "outlook"
     if db._find_domain_email(db._load_domain_pool(), email):  # 内部轻量查询，仅本项目使用
         return "cloudflare_domain"
+
+    # 邮箱池里查不到的历史账号，按账号登记来源路由收件渠道：
+    # - cloudflare_domain 已弃用（域名邮箱迁移到 CloudMail），改走 cloudmail；
+    # - cloudmail 平台邮箱不落本地池，WebUI 重启后内存上下文丢失，
+    #   必须按账号登记来源路由，否则会兜底到 EMAIL_SOURCE 第一个来源（如 remail）。
+    try:
+        account = db.get_account_by_email(email) or {}
+        account_source = str(account.get("email_source") or "").strip().lower()
+    except Exception:
+        account_source = ""
+    if account_source in ("cloudflare_domain", "cloudmail"):
+        return "cloudmail"
+
     # 兜底：如果域名匹配 EMAIL_DOMAIN，则按域名邮箱处理
     try:
         from config import email as _email_cfg

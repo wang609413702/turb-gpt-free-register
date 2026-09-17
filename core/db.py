@@ -1603,7 +1603,7 @@ def update_account_gcash_check(acc_id: int | None = None, email: str | None = No
 def update_account_check_route(acc_id: int, prefix: str, proxy: str | None) -> bool:
     """检测启动时预写本次使用的代理（掩码 + 用户名），让前端"检测中"即可看到线路。
 
-    prefix 为检测类型（gcash/momo/paypal/kakao/ideal/gopay），检测完成后的
+    prefix 为检测类型（gcash/momo/paypal/kakao/ideal/gopay/upi），检测完成后的
     update_account_*_check 会用正式结果覆盖这里的预写值。
     """
     if not acc_id:
@@ -2222,6 +2222,145 @@ def recover_interrupted_gopay_checks() -> int:
         return recovered
 
 
+# ============================== UPI 检测 ============================== #
+def claim_account_upi_check(
+    acc_id: int | None = None,
+    email: str | None = None,
+    trigger: str = "manual",
+) -> bool:
+    """原子占用账号的 UPI 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        current_status = row.get("upi_check_status")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "upi_check_queued_at" if current_status == "queued" else "upi_check_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current_status == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        now = _now()
+        row["upi_check_status"] = "queued"
+        row["upi_check_trigger"] = str(trigger or "manual")
+        row["upi_check_queued_at"] = now
+        row["upi_check_started_at"] = None
+        row["upi_check_completed_at"] = None
+        row["upi_check_error"] = None
+        row["updated_at"] = now
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def mark_account_upi_check_running(acc_id: int) -> bool:
+    """把已排队的 UPI 检测标记为执行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("upi_check_status") not in {"queued", "running"}:
+            return False
+        row["upi_check_status"] = "running"
+        row["upi_check_started_at"] = _now()
+        row["upi_check_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_upi_check_exit(acc_id: int, exit_ip: str = "", exit_country: str = "") -> bool:
+    """检测运行中写入代理出口 IP/地区，供前端展示「检测中,IP:…,地区:…」。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["upi_exit_ip"] = str(exit_ip or "").strip()
+        row["upi_exit_country"] = str(exit_country or "").strip()
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def update_account_upi_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """更新账号 UPI 支付检测结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        ok = bool(result.get("ok"))
+        row["upi_check_status"] = "success" if ok else "failed"
+        row["upi_ok"] = ok
+        row["upi_checked_at"] = result.get("checked_at") or _now()
+        row["upi_check_completed_at"] = _now()
+        row["upi_check_http_status"] = result.get("http_status")
+        row["upi_check_error"] = None if ok else result.get("error")
+
+        if ok:
+            row["upi_has_upi"] = result.get("has_target")
+            row["upi_decision"] = result.get("decision")
+            row["upi_decision_text"] = result.get("decision_text")
+            row["upi_supported"] = result.get("supported")
+            row["upi_conclusive"] = result.get("conclusive")
+            row["upi_methods"] = result.get("methods")
+            row["upi_stripe_mode"] = result.get("stripe_mode")
+            row["upi_checkout_provider"] = result.get("checkout_provider")
+            row["upi_session_kind"] = result.get("session_kind")
+            row["upi_promo_granted"] = result.get("promo_granted")
+            row["upi_last_success_at"] = result.get("checked_at") or _now()
+
+        if result.get("exit_ip") or result.get("exit_country"):
+            row["upi_exit_ip"] = result.get("exit_ip")
+            row["upi_exit_country"] = result.get("exit_country")
+        row["upi_check_proxy_mode"] = result.get("proxy_mode")
+        row["upi_check_network_route"] = result.get("network_route")
+        row["upi_check_proxy_used"] = result.get("proxy_used")
+        row["upi_check_proxy_username"] = result.get("proxy_username")
+        row["upi_check_proxy_fallback_reason"] = result.get("proxy_fallback_reason")
+        row["upi_check_result_json"] = json.dumps(result, ensure_ascii=False)
+        row["updated_at"] = _now()
+        _save_accounts(accounts, sync_artifacts=False)
+        return True
+
+
+def recover_interrupted_upi_checks() -> int:
+    """服务启动时把上次进程遗留的 UPI 检测状态恢复为可重试失败。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("upi_check_status") not in {"queued", "running"}:
+                continue
+            row["upi_check_status"] = "failed"
+            row["upi_ok"] = False
+            row["upi_check_error"] = "WebUI 重启导致 UPI 检测中断，请重新检测"
+            row["upi_check_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts, sync_artifacts=False)
+        return recovered
+
+
 def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str = "pix") -> bool:
     """原子占用账号提链任务；已有未超时任务时返回 False。"""
     with _LOCK:
@@ -2341,6 +2480,7 @@ _CAPABILITY_QUERY_FIELDS = {
     "paypal": "paypal_has_paypal",
     "ideal": "ideal_has_ideal",
     "gopay": "gopay_has_gopay",
+    "upi": "upi_has_upi",
     **{
         f"trial_{region}": f"trial_{region}_eligible"
         for region in TRIAL_REGIONS
@@ -2560,6 +2700,15 @@ def list_account_plan_check_statuses(
         "gopay_check_started_at", "gopay_check_completed_at",
         "gopay_checked_at", "gopay_last_success_at",
         "gopay_exit_ip", "gopay_exit_country", "gopay_check_proxy_username",
+        # UPI 检测
+        "upi_check_status", "upi_ok", "upi_has_upi", "upi_decision",
+        "upi_decision_text", "upi_supported", "upi_conclusive",
+        "upi_methods", "upi_stripe_mode", "upi_checkout_provider", "upi_session_kind",
+        "upi_promo_granted",
+        "upi_check_error", "upi_check_trigger", "upi_check_queued_at",
+        "upi_check_started_at", "upi_check_completed_at",
+        "upi_checked_at", "upi_last_success_at",
+        "upi_exit_ip", "upi_exit_country", "upi_check_proxy_username",
         "momo_check_network_route", "momo_check_proxy_used",
         # 2FA/TOTP 设置状态
         "totp_setup_status", "totp_setup_ok", "totp_setup_error",

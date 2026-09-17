@@ -140,7 +140,7 @@ class AccountLivenessTests(unittest.TestCase):
              patch.object(live_service.db, "mark_account_live_check_running", return_value=True), \
              patch.object(live_service.db, "update_account_liveness"), \
              patch.object(live_service, "_append_log"), \
-             patch.object(live_service, "resolve_plan_check_route", return_value={
+             patch.object(live_service, "resolve_live_check_route", return_value={
                  "proxy": "socks5://proxy.example:1080",
                  "network_route": "proxy",
                  "proxy_mode": "auto",

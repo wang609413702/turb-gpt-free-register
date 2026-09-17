@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import cloakbrowser as _cfg
+from core.socks_forwarder import forwarded_proxy_url, parse_socks_url
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +84,22 @@ class CloakElement:
         except Exception:
             return ""
 
+    # Selenium 特殊键 → Playwright 按键名；其余私有区字符按组合键分支处理。
+    _SELENIUM_SPECIAL_KEYS = {
+        "\ue003": "Backspace",  # Keys.BACKSPACE
+        "\ue007": "Enter",      # Keys.ENTER
+        "\ue004": "Tab",        # Keys.TAB
+        "\ue00c": "Escape",     # Keys.ESCAPE
+        "\ue012": "ArrowLeft",
+        "\ue013": "ArrowUp",
+        "\ue014": "ArrowRight",
+        "\ue015": "ArrowDown",
+    }
+
     def send_keys(self, *values: str) -> None:
         # 兼容 Selenium: el.send_keys(Keys.COMMAND, 'a')。
         text = "".join(str(v or "") for v in values)
         lower = text.lower()
-        try:
-            self.click()
-        except Exception:
-            pass
         if "\ue03d" in text or "\ue009" in text or "command" in lower or "control" in lower:
             # Selenium Keys.CONTROL/COMMAND 编码可能传入私有区字符；这里按全选处理。
             try:
@@ -98,13 +107,27 @@ class CloakElement:
             except Exception:
                 self.page.keyboard.press("Control+A")
             return
+        special = self._SELENIUM_SPECIAL_KEYS.get(text)
+        if special is not None:
+            self.page.keyboard.press(special)
+            return
+        # Selenium send_keys 语义是在光标处追加：未聚焦时先聚焦，再逐字键入。
+        # 不要每段都 setSelectionRange——React 受控输入的 value 更新是异步的，
+        # 依据可能过期的 value 定位光标会把后续字符插进中间打乱顺序；
+        # 连续键入时光标由浏览器自己维护。
         try:
-            if self.locator is not None:
-                self.locator.fill(text, timeout=10000)
-            else:
-                self.handle.fill(text, timeout=10000)
+            same = bool(self._eval("el => document.activeElement === el"))
         except Exception:
-            self.page.keyboard.type(text, delay=35)
+            same = False
+        if not same:
+            try:
+                self.click()
+            except Exception:
+                try:
+                    self._eval("el => el.focus()")
+                except Exception:
+                    pass
+        self.page.keyboard.type(text, delay=25)
 
     def get_attribute(self, name: str) -> str | None:
         try:
@@ -323,6 +346,41 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     return proxy.replace("socks5h://", "socks5://")
 
 
+def _mask_proxy_url(proxy: str | None) -> str:
+    """日志用：隐藏代理 URL 中的密码，避免凭据落入日志文件。"""
+    value = str(proxy or "")
+    scheme_sep = value.find("://")
+    at = value.rfind("@")
+    if scheme_sep == -1 or at < scheme_sep:
+        return value
+    cred = value[scheme_sep + 3:at]
+    user = cred.split(":", 1)[0]
+    return f"{value[:scheme_sep + 3]}{user}:***{value[at:]}"
+
+
+def _resolve_browser_proxy(proxy_url: str | None) -> str | None:
+    """决定传给浏览器的代理地址。
+
+    Chromium 不支持 SOCKS5 认证（带凭据的 socks:// URL 会被 --proxy-server
+    解析器整体判无效，页面报 net::ERR_NO_SUPPORTED_PROXIES），因此带认证的
+    SOCKS5 统一换成本地无认证转发入口，由转发层代为完成上游认证。
+    """
+    if not proxy_url or not bool(getattr(_cfg, "CLOAK_SOCKS_FORWARD", True)):
+        return proxy_url
+    if parse_socks_url(proxy_url) is None:
+        return proxy_url
+    local = forwarded_proxy_url(proxy_url)
+    if local:
+        logger.info(
+            "[Cloak] 带认证 SOCKS5 走本地转发入口：%s（上游 %s）", local, _mask_proxy_url(proxy_url),
+        )
+        return local
+    logger.warning(
+        "[Cloak] 本地 SOCKS 转发启动失败，仍传原始代理（浏览器将无法认证）：%s", _mask_proxy_url(proxy_url),
+    )
+    return proxy_url
+
+
 def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
     """按当前/代理出口检测地理信息，供 Cloak 显式 locale/timezone 使用。"""
     try:
@@ -419,6 +477,7 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         launch_args.append(f"--fingerprint={seed}")
 
     proxy_url = _normalize_proxy(proxy) if bool(getattr(_cfg, "CLOAK_USE_PROXY", True)) else None
+    browser_proxy_url = _resolve_browser_proxy(proxy_url)
     locale_opts = _build_cloak_locale_options(proxy_url)
     # geoip=True 交给 CloakBrowser 根据当前出口 IP 自动匹配 timezone/locale/WebRTC。
     # 之前只有显式 proxy_url 时才开启；如果用户走系统代理/VPN/透明代理，代码层面
@@ -432,8 +491,8 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         opts["locale"] = locale_opts["locale"]
     if locale_opts.get("timezone"):
         opts["timezone"] = locale_opts["timezone"]
-    if proxy_url:
-        opts["proxy"] = proxy_url
+    if browser_proxy_url:
+        opts["proxy"] = browser_proxy_url
     if launch_args:
         opts["args"] = launch_args
     license_key = str(getattr(_cfg, "CLOAK_LICENSE_KEY", "") or "").strip()
@@ -444,7 +503,7 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     logger.info(
         "[Cloak] 启动 CloakBrowser：headless=%s humanize=%s geoip=%s proxy=%s locale=%s timezone=%s accept_language=%s persistent=%s",
         opts.get("headless"), opts.get("humanize"), opts.get("geoip"),
-        proxy_url or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
+        _mask_proxy_url(browser_proxy_url) or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
         locale_opts.get("accept_language") or "自动/默认", bool(user_data_dir),
     )
     context_kwargs = {}
@@ -470,4 +529,14 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
-    return driver, CloakOpenResult(raw={"driver": "cloakbrowser", "proxy": proxy_url, "locale": locale_opts, "options": {k: v for k, v in opts.items() if k != "license_key"}})
+    return driver, CloakOpenResult(
+        raw={
+            "driver": "cloakbrowser",
+            # proxy 保留原始上游（账号档案里的 proxy_used 记录真实出口），
+            # 实际传给浏览器的是本地转发入口时另存 proxy_via_local。
+            "proxy": proxy_url,
+            "proxy_via_local": browser_proxy_url if browser_proxy_url != proxy_url else None,
+            "locale": locale_opts,
+            "options": {k: v for k, v in opts.items() if k != "license_key"},
+        }
+    )
